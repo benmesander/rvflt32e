@@ -22,11 +22,14 @@
 # You should have received a copy of the GNU General Public License and
 # a copy of the GCC Runtime Library Exception along with this program;
 # see the files LICENSE.txt and LICENSE-EXCEPTION.txt respectively.  If not, see
-# <http://www.gnu.org/licenses/>.  */
+# <http://www.gnu.org/licenses/>.
 
 .text
-.global __addsf3
-.global __subsf3
+.section .text.__addsf3, "ax", @progbits
+.globl  __addsf3
+.globl  __subsf3
+.type   __addsf3, @function
+.type   __subsf3, @function
 
 __subsf3:
   lui a5, 0x80000                                   # change sign
@@ -187,3 +190,5 @@ produce_nan:
   lui a0, 0x7FC00
   ret                                               # return quiet NaN
 
+  .size __subsf3, . - __subsf3
+  .size __addsf3, . - __addsf3

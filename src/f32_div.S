@@ -24,11 +24,10 @@
 # see the files LICENSE.txt and LICENSE-EXCEPTION.txt respectively.  If not, see
 # <http://www.gnu.org/licenses/>.  */
 
-# Define OPPORTUNISTIC_NAN to save code size. The information in the input NaN will be discarded, and the output will be a quiet NaN different from the input one
-# If OPPORTUNISTIC_NAN is not defined, the input NaN is extended and transformed into a quiet NaN (consistent with libgcc)
-
 .text
+.section .text.__divsf3, "ax", @progbits
 .global __divsf3
+.type __divsf3, @function
 
 __divsf3:
   # Determine the final sign

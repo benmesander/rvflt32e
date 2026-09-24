@@ -1,133 +1,130 @@
-# Copyright ETH Zurich 2020
-#
-# Author: Matteo Perotti
-#
-# This file is part of rvfplib.
-#
-# rvfplib is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# rvfplib is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# Under Section 7 of GPL version 3, you are granted additional
-# permissions described in the GCC Runtime Library Exception, version
-# 3.1, as published by the Free Software Foundation.
-#
-# You should have received a copy of the GNU General Public License and
-# a copy of the GCC Runtime Library Exception along with this program;
-# see the files LICENSE.txt and LICENSE-EXCEPTION.txt respectively.  If not, see
-# <http://www.gnu.org/licenses/>.  */
+/* src/f32_mul.S - Single-Precision Floating-Point Multiplication (__mulsf3)
+ * Target: RV32EC / ilp32e (CH32V003)
+ *
+ * Implements IEEE 754 single-precision multiplication using a software
+ * 24-bit shift-and-add bit-serial multiplier (no M extension required).
+ * Flushes denormals to zero, rounds to nearest-even (RNE), and returns canonical quiet NaNs.
+ */
 
-# RISC-V mul, denormals flushed to 0
-
-.global __mulsf3
+.text
+.section .text.__mulsf3, "ax", @progbits
+.globl __mulsf3
+.type __mulsf3, @function
 
 __mulsf3:
-  lui a4, 0x80000           # Prepare the mask for the sign
-  xor a5, a0, a1            # Determine the final sign
-  and a4, a4, a5            # Determine the final sign
-  # Mask out exponents, trap any zero/denormal/INF/NAN.
-  addi a5, x0, 0xff         # Prepare the exp. mask
-  srli a2, a0, 23           # Isolate sign and exp. (A)
-  and a2, a2, a5            # Isolate exp. (A)
-  srli a3, a1, 23           # Isolate sign and exp. (B)
-  and a3, a3, a5            # Isolate exp. (B)
-  beq a2, a5, inf_nan       # Jump if A is Inf/NaN
-  beq a3, a5, inf_nan       # Jump if B is Inf/NaN
+  lui a4, 0x80000           # Prepare sign mask (0x80000000)
+  xor a5, a0, a1            # Determine final sign
+  and a4, a4, a5            # Isolate final sign in a4
+
+  # Isolate exponents and check for special cases
+  addi a5, x0, 0xff         # Exponent mask (0xFF)
+  srli a2, a0, 23           # Isolate exp(A)
+  and a2, a2, a5
+  srli a3, a1, 23           # Isolate exp(B)
+  and a3, a3, a5
+
+  beq a2, a5, inf_nan       # Jump if A is Inf or NaN
+  beq a3, a5, inf_nan       # Jump if B is Inf or NaN
   beqz a2, zero_denormal    # Jump if A is zero/denormal
   beqz a3, zero_denormal    # Jump if B is zero/denormal
 
 normal_case:
   # Add exponents together
-  add a2, a2, a3     # Add exponents together
+  add a2, a2, a3           # a2 = expA + expB
 
-  # Convert mantissa to unsigned integer.
-  # If power of two, branch to a separate path.
-  # Make up for final alignment.
-  slli a0, a0, 9             # Isolate mantissa A
-  slli a1, a1, 9             # Isolate mantissa B
-  lui a3, 0x08000            # Prepare the implicit 1
-  srli a0, a0, 5             # Shift mantissa A to have the MSB of the result in a convenient position
-  srli a1, a1, 5             # Shift mantissa B to have the MSB of the result in a convenient position
-  or a0, a0, a3              # Add the implicit 1 (A) in position 28
-  or a1, a1, a3              # Add the implicit 1 (B) in position 28
+  # Isolate 24-bit mantissas (bit 23 = implicit 1)
+  slli a0, a0, 8           # Clear sign & exp of A
+  srli a0, a0, 8           # a0 = 23-bit fraction A
+  lui t0, 0x00800          # t0 = 0x800000 (implicit 1 at bit 23)
+  or a0, a0, t0            # a0 = 24-bit Mantissa A
 
-  # The actual multiplication.
-  mul a3, a0, a1             # LSbs of the result
-  mulhu a1, a0, a1           # MSbs of the result
+  slli a1, a1, 8           # Clear sign & exp of B
+  srli a1, a1, 8           # a1 = 23-bit fraction B
+  or a1, a1, t0            # a1 = 24-bit Mantissa B
 
-  # Put final sign in a0.
-  mv a0, a4                  # Write the correct sign in a0
+  # Software 24-bit x 24-bit multiplication loop
+  # Multiplicand in a0
+  # Multiplier in a1 (terminates when a1 == 0 after 24 right shifts)
+  # Product High in t1, Product Low in a3
+  li t1, 0
+  li a3, 0
 
-  # Adjust result upon the MSB position.
-  lui a5, 0x00800            # Prepare the mask in position 24
-  bgeu a1, a5, 1f            # Branch if there is no need for normalizing
-  slli a1, a1, 1             # Normalize: shift left the result (1)
-  srli a5, a3, 31            # Normalize: shift left the result (2)
-  or a1, a1, a5              # Normalize: shift left the result (3)
-  slli a3, a3, 1             # Normalize: shift left the result (4)
-  addi a2, a2, -1            # Adjust the final exponent because of the normalization
-
-  # Move the result in a0. Sign already in a0
+mul_loop:
+  andi t2, a1, 1
+  beqz t2, 1f
+  add t1, t1, a0           # Add multiplicand to Product High
 1:
-  or a0, a0, a1      # Add sign to the result
+  srli a3, a3, 1           # Shift Product Low right
+  slli t2, t1, 31          # Extract LSB of Product High
+  or a3, a3, t2            # Insert into MSB of Product Low
+  srli t1, t1, 1           # Shift Product High right
+  srli a1, a1, 1           # Shift Multiplier right
+  bnez a1, mul_loop        # Exactly 24 iterations until a1 == 0
 
-# Apply exponent bias, check for under/overflow.
-  addi a2, a2, -127          # Apply exponent bias
-  addi a5, x0, 254           # Prepare to check for under/overflow
+  # Right-align Product Low (a3) from bits [31:8] to bits [23:0]
+  srli a3, a3, 8
+
+  # Apply exponent bias
+  addi a2, a2, -127
+
+  # Check normalization requirement (Product >= 2.0 vs < 2.0)
+  bgeu t1, t0, 1f          # If t1 >= 0x800000 (bit 23 set), product in [2.0, 4.0)
+  # Product in [1.0, 2.0): shift 48-bit product left by 1 bit
+  slli t1, t1, 1
+  srli t2, a3, 23          # Extract MSB of a3
+  or t1, t1, t2            # Bring into LSB of t1
+  slli a3, a3, 1           # Shift remainder left
+  j 2f
+1:
+  # Product in [2.0, 4.0): increment exponent
+  addi a2, a2, 1
+2:
+
+  # Check for exponent underflow or overflow
+  addi a5, x0, 254
   bgeu a2, a5, und_ov_flow
 
-# Round the result, merge final exponent.
-# CIAONE = 0x80000
-  lui a4, 0x80000
-  slli a2, a2, 23
-  add a0, a0, a2
-  bltu a3, a4, exit
-  addi a0, a0, 1
-  bne a3, a4, exit
-  andi a0, a0, -2
+  # Assemble unrounded result in a0
+  xor t1, t1, t0           # Clear implicit 1 (bit 23) from t1
+  slli a2, a2, 23          # Align exponent to bits [30:23]
+  add a0, a4, a2           # Merge sign (a4) and exponent (a2)
+  add a0, a0, t1           # Merge fraction bits [22:0]
+
+  # Round to nearest-even (RNE) using Guard bit in a3 (0x800000)
+  bltu a3, t0, exit        # If remainder < 0.5 (a3 < 0x800000), do not round up
+  addi a0, a0, 1           # Round up candidate
+  bne a3, t0, exit         # If remainder > 0.5, keep round up
+  andi a0, a0, -2          # Tie case (remainder == 0.5): round to even LSB
 exit:
   ret
 
 und_ov_flow:
-  # Overflow?
-  blt x0, a2, inf      # If here, a2 is either in ovf (> 0) or in underflow (<= 0)
-  # Underflow: return signed 0.
-# a4 = 0x80000
-  j append_zero
-
-zero_denormal:
-# Here, one or more arguments are either denormalized or zero.
-# Result is 0, but determine sign anyway.
-append_zero:
+  # Overflow (a2 > 0) vs Underflow (a2 <= 0)
+  blt x0, a2, inf
+  # Underflow: return signed zero
   mv a0, a4
   ret
 
-  # One or both args are INF or NAN.
+zero_denormal:
+  mv a0, a4                # Return signed zero
+  ret
+
 inf_nan:
-  slli a2, a2, 24      # Isolate the exponent of A
-  slli a3, a3, 24      # Isolate the exponent of B
-  beqz a2, nan         # Return NaN if A is 0 or denormal
-  beqz a3, nan         # Return NaN if B is 0 or denormal
-  slli a5, a5, 24      # Prepare the mask for NaN
-  slli a3, a0, 1       # Eliminate the sign of A
-  bltu a5, a3, nan     # Return NaN if A is NaN
-  slli a3, a1, 1       # Eliminate the sign of B
-  bltu a5, a3, nan     # Return NaN if B is NaN
-# One of the operands is Inf, the other is an Inf or a number.
+  slli a2, a2, 24          # Isolate exponent of A
+  slli a3, a3, 24          # Isolate exponent of B
+  beqz a2, nan             # Return NaN if A is 0 or denormal (0 * Inf)
+  beqz a3, nan             # Return NaN if B is 0 or denormal (Inf * 0)
+  slli a5, a5, 24          # Mask 0xFF000000 for NaN check
+  slli a3, a0, 1           # Clear sign of A
+  bltu a5, a3, nan         # Return NaN if A is NaN
+  slli a3, a1, 1           # Clear sign of B
+  bltu a5, a3, nan         # Return NaN if B is NaN
 
-# Overflow: return Inf (sign already in a0).
 inf:
-  lui a0, 0x7f800      # Set max exponent
-  or a0, a0, a4        # Put the sign
-  ret                  # Return
+  lui a0, 0x7f800          # Load Inf exponent
+  or a0, a0, a4            # Apply sign
+  ret
 
-  # Return a quiet NaN.
 nan:
-  lui a0, 0x7fc00
+  lui a0, 0x7fc00          # Quiet NaN
   ret

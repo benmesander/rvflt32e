@@ -24,7 +24,7 @@
 # see the files LICENSE.txt and LICENSE-EXCEPTION.txt respectively.  If not, see
 # <http://www.gnu.org/licenses/>.  */
 
-
+.text
 .global __addsf3
 .global __subsf3
 

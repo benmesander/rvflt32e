@@ -2,7 +2,7 @@
 
 Items from the 2026-09-24 code review. Numbering matches the original review.
 
-Already resolved: #1–#12, #14, #21–#24.
+Already resolved: #1–#12, #14–#24. Only #13 remains.
 
 Verified under spike at the library's real `rv32ec`/`ilp32e` target via
 `make test`: 305,775 checks, **0 failures**. Strict build is 1182 bytes of
@@ -135,43 +135,47 @@ and it needs no external tooling.
 
 ## P2 — Maintainability and hygiene
 
-- [ ] **#15 — Non-local labels pollute the symbol table.**
-  `normal_case`, `mul_loop`, `exit`, `inf`, `nan`, `zero`, `zero_denormal`,
-  `inf_nan`, `und_ov_flow`, `sum`, `rounding`, `adjust`, `skip_add` lack a `.L`
-  prefix in `f32_add.S`, `f32_div.S`, `f32_mul.S`, `mul.S`. They are `STB_LOCAL`
-  so linking works, but they bloat the symbol table and make disassembly and
-  refactoring hazardous. `f32_conv.S` and `f32_cmp.S` already do this correctly.
+- [x] **#15 — Non-local labels pollute the symbol table.**
+  Every internal label now uses a `.L` prefix, which the assembler keeps out of
+  the symbol table entirely. `f32_add.o` went from 23 exported symbols to 2, and
+  the library as a whole now exports only its 16 public routines.
+  All sources were also reformatted to the rvint house style: tabs, mnemonic and
+  operands tab separated, comments at column 40, labels at column 0, and a
+  banner block per routine giving input and output registers.
 
-- [ ] **#16 — Dead code and inverted comments.**
-  - `f32_add.S` label `7:`: `a5` is `0` there (the `beqz a5, 7f` only branches when
-    `sltiu` produced 0), yet the comment claims "a5 is 1". `slli a5,a5,31` and
-    `and a3,a5,a0` therefore compute zero into `a3`, which is never read —
-    `inf:` uses `a4`. Two dead instructions in a ROM-constrained library.
-  - `f32_add.S` `# a5 = 0xFF` — it is actually `0xFF000000`.
-  - `f32_add.S` "branch if the final exponent is lower than zero" on a
-    `bge a2, zero` — condition is inverted.
-  - `f32_div.S` `# t0 = 0x80000` (twice) — `t0` is `0x80000000`.
-  - `f32_mul.S` "Exactly 24 iterations" is true only because mantissa B always has
-    bit 23 set; state that load-bearing assumption explicitly.
+- [x] **#16 — Dead code and inverted comments.**
+  The `7:` block in `f32_add.S` was reached only when `a5` was 0, so its
+  `slli`/`and` pair computed zero into a register nothing read. The branch now
+  targets `.Linf` directly, which removed the label and both instructions and
+  took `f32_add.o` from 280 to 274 bytes. The two `a5 is 0` / `a5 is 1` comments
+  around it were transposed, `# a5 = 0xFF` was really `0xFF000000`, the
+  `bge a2, zero` comment described the opposite branch, `# t0 = 0x80000` in
+  `f32_div.S` was really `0x80000000`, and the `num_canc` and `diff_sign`
+  register notes described registers that had already been overwritten. All
+  corrected or removed, along with a commented out instruction in
+  `.Lboth_tiny`.
 
-- [ ] **#17 — Header: bogus `__c51__` guard.**
-  C51 is an 8051 compiler, irrelevant here. Worse, the closing
-  `#ifdef __cplusplus } #endif` is unconditional, so if both macros were defined
-  you get an unbalanced brace. Delete the `__c51__` arm.
+- [x] **#17 — Header: bogus `__c51__` guard.** Removed.
 
-- [ ] **#18 — Header: `#include <stdint.h>` sits inside `extern "C"`.**
-  Move the system include above the linkage block.
+- [x] **#18 — Header: `#include <stdint.h>` sat inside `extern "C"`.**
+  Moved above the linkage block.
 
-- [ ] **#19 — `f32_mul.S` is missing its license header.**
-  It is the only source without the GPL + Runtime Library Exception banner, which
-  is a real distribution concern for a GPL-with-exception library. The missing
-  `.size __mulsf3` part of this item is done.
+- [x] **#19 — `f32_mul.S` license header.** Restored, see #20.
 
-- [ ] **#20 — Copyright attribution on the newer files.**
-  `f32_cmp.S` and `f32_conv.S` carry "Copyright ETH Zurich 2020 / Author: Matteo
-  Perotti", but their style, label convention, and algorithms differ markedly from
-  the RVfplib-derived `f32_add.S`/`f32_div.S`. If written fresh, drop the ETH
-  attribution; if derived, `f32_mul.S` needs it too. Worth getting right.
+- [x] **#20 — Copyright attribution.**
+  Settled from the history rather than by inspection. `181a080` ("initial import
+  of sources from other libs") added `f32_add.S`, `f32_div.S`, `f32_mul.S` and
+  `mul.S`; `f729278` ("initial checking") added `f32_cmp.S` and `f32_conv.S`,
+  and those two carried no copyright at all until `1f109ac` applied the rvfplib
+  header to everything indiscriminately.
+  - `f32_cmp.S`, `f32_conv.S`: original work, so the ETH Zurich attribution was
+    removed.
+  - `f32_mul.S`: genuinely derived from rvfplib. Its prologue, `inf_nan`,
+    `zero_denormal`, `inf` and `nan` blocks are unchanged from the imported
+    version; only the multiplier core was replaced with the bit serial loop. The
+    ETH Zurich attribution was restored, with a note describing what was kept.
+  - `f32_add.S`, `f32_div.S`: derived, attribution already correct.
+  - `mul.S`: from rvint, attribution already correct.
 
 ---
 

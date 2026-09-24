@@ -26,7 +26,9 @@
 #
 # routine: __mulsi3
 #
-# Native word length signed/unsigned multiplication.
+# Native word length signed/unsigned multiplication. The sign of the product
+# depends only on the signs of the operands, so the magnitudes are multiplied
+# and the sign is reapplied at the end.
 #
 # Optimizations:
 # - Swaps operands to ensure the smaller value is the multiplier (loop counter).
@@ -39,44 +41,51 @@
 # a0 = product
 ################################################################################
 
-    .text
-    .section .text.__mulsi3, "ax", @progbits
-    .p2align 1
-    .globl __mulsi3
-    .type __mulsi3, @function
+.globl	__mulsi3
+
+	.section .text.__mulsi3, "ax", @progbits
+	.p2align 1
+	.type	__mulsi3, @function
 
 __mulsi3:
-    xor     t0, a0, a1          # t0 bit 31 stores the expected final sign
+	xor	t0, a0, a1		# bit 31 holds the expected final sign
 
-    # Convert a0 to |a0|
-    bgez    a0, 1f
-    neg     a0, a0
-1:
-    # Convert a1 to |a1|
-    bgez    a1, 2f
-    neg     a1, a1
-2:
-    # Swap operands so smaller magnitude is in a1 (multiplier)
-    bgeu    a0, a1, 3f
-    mv      a2, a0
-    mv      a0, a1
-    mv      a1, a2
-3:
-    mv      a2, a0              # a2 = multiplicand magnitude
-    li      a0, 0              # a0 = product accumulator
+	# Convert a0 to |a0|
+	bgez	a0, .Labs_b
+	neg	a0, a0
 
-mul_loop:
-    andi    a3, a1, 1          # Test LSB of multiplier
-    beqz    a3, skip_add
-    add     a0, a0, a2          # Accumulate
-skip_add:
-    srli    a1, a1, 1          # Shift multiplier right
-    slli    a2, a2, 1          # Shift multiplicand left
-    bnez    a1, mul_loop       # Exit as soon as remaining multiplier bits are 0
+.Labs_b:
+	# Convert a1 to |a1|
+	bgez	a1, .Lorder
+	neg	a1, a1
 
-    # Apply sign correction
-    bgez    t0, exit
-    neg     a0, a0
-exit:
-    ret
-    .size __mulsi3, . - __mulsi3
+.Lorder:
+	# Swap so the smaller magnitude ends up in a1, since the multiplier is
+	# what bounds the loop count.
+	bgeu	a0, a1, .Linit
+	mv	a2, a0
+	mv	a0, a1
+	mv	a1, a2
+
+.Linit:
+	mv	a2, a0			# multiplicand magnitude
+	li	a0, 0			# product accumulator
+
+.Lloop:
+	andi	a3, a1, 1
+	beqz	a3, .Lskip_add
+	add	a0, a0, a2
+
+.Lskip_add:
+	srli	a1, a1, 1
+	slli	a2, a2, 1
+	bnez	a1, .Lloop		# stop once no multiplier bits remain
+
+	# Apply sign correction
+	bgez	t0, .Ldone
+	neg	a0, a0
+
+.Ldone:
+	ret
+
+	.size	__mulsi3, .-__mulsi3

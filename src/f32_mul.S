@@ -1,146 +1,178 @@
-/* src/f32_mul.S - Single-Precision Floating-Point Multiplication (__mulsf3)
- * Target: RV32EC / ilp32e (CH32V003)
- *
- * Implements IEEE 754 single-precision multiplication using a software
- * 24-bit shift-and-add bit-serial multiplier (no M extension required).
- * Flushes denormals to zero, rounds to nearest-even (RNE), and returns canonical quiet NaNs.
- */
+################################################################################
+# Copyright ETH Zurich 2020
+# Copyright Benard Mesander 2026
+#
+# Author: Matteo Perotti, Benard Mesander
+#
+# Derived from rvfplib. The exponent handling, sign handling and special case
+# paths come from that implementation; the multiplier core was replaced with a
+# bit serial loop so that no M extension is required.
+#
+# This file is part of rvflt32e.
+#
+# rvflt32e is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# rvflt32e is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# Under Section 7 of GPL version 3, you are granted additional
+# permissions described in the GCC Runtime Library Exception, version
+# 3.1, as published by the Free Software Foundation.
+#
+# You should have received a copy of the GNU General Public License and
+# a copy of the GCC Runtime Library Exception along with this program;
+# see the files LICENSE.txt and LICENSE-EXCEPTION.txt respectively.  If not, see
+# <http://www.gnu.org/licenses/>.
+################################################################################
 
-.section .text.__mulsf3, "ax", @progbits
-.p2align 1
-.globl __mulsf3
-.type __mulsf3, @function
+.globl	__mulsf3
+
+	.section .text.__mulsf3, "ax", @progbits
+	.p2align 1
+	.type	__mulsf3, @function
+
+################################################################################
+# routine: __mulsf3
+#
+# IEEE 754 single precision multiplication, using a bit serial 24x24
+# shift and add multiplier so that no M extension is required.
+# Subnormals are flushed to zero, rounding is to nearest with ties to even,
+# and a canonical quiet NaN is returned for every invalid case.
+#
+# input registers:
+# a0 = operand a
+# a1 = operand b
+#
+# output registers:
+# a0 = product
+################################################################################
 
 __mulsf3:
-  lui a4, 0x80000           # Prepare sign mask (0x80000000)
-  xor a5, a0, a1            # Determine final sign
-  and a4, a4, a5            # Isolate final sign in a4
+	lui	a4, 0x80000
+	xor	a5, a0, a1
+	and	a4, a4, a5		# final sign
 
-  # Isolate exponents and check for special cases
-  addi a5, x0, 0xff         # Exponent mask (0xFF)
-  srli a2, a0, 23           # Isolate exp(A)
-  and a2, a2, a5
-  srli a3, a1, 23           # Isolate exp(B)
-  and a3, a3, a5
+	addi	a5, x0, 0xff		# exponent mask
+	srli	a2, a0, 23
+	and	a2, a2, a5		# exp(a)
+	srli	a3, a1, 23
+	and	a3, a3, a5		# exp(b)
 
-  beq a2, a5, inf_nan       # Jump if A is Inf or NaN
-  beq a3, a5, inf_nan       # Jump if B is Inf or NaN
-  beqz a2, zero_denormal    # Jump if A is zero/denormal
-  beqz a3, zero_denormal    # Jump if B is zero/denormal
+	beq	a2, a5, .Linf_nan
+	beq	a3, a5, .Linf_nan
+	beqz	a2, .Lzero_denormal
+	beqz	a3, .Lzero_denormal
 
-normal_case:
-  # Add exponents together
-  add a2, a2, a3           # a2 = expA + expB
+	add	a2, a2, a3		# exp(a) + exp(b)
 
-  # Isolate 24-bit mantissas (bit 23 = implicit 1)
-  slli a0, a0, 8           # Clear sign & exp of A
-  srli a0, a0, 8           # a0 = 23-bit fraction A
-  lui t0, 0x00800          # t0 = 0x800000 (implicit 1 at bit 23)
-  or a0, a0, t0            # a0 = 24-bit Mantissa A
+	# Build the two 24-bit significands, implicit 1 at bit 23.
+	slli	a0, a0, 8
+	srli	a0, a0, 8
+	lui	t0, 0x00800
+	or	a0, a0, t0		# multiplicand
+	slli	a1, a1, 8
+	srli	a1, a1, 8
+	or	a1, a1, t0		# multiplier
 
-  slli a1, a1, 8           # Clear sign & exp of B
-  srli a1, a1, 8           # a1 = 23-bit fraction B
-  or a1, a1, t0            # a1 = 24-bit Mantissa B
+	# 48-bit product accumulates with the high half in t1 and the low half
+	# in a3. The multiplier always has bit 23 set, so the loop runs exactly
+	# 24 times before a1 reaches zero.
+	li	t1, 0
+	li	a3, 0
 
-  # Software 24-bit x 24-bit multiplication loop
-  # Multiplicand in a0
-  # Multiplier in a1 (terminates when a1 == 0 after 24 right shifts)
-  # Product High in t1, Product Low in a3
-  li t1, 0
-  li a3, 0
+.Lmul_loop:
+	andi	t2, a1, 1
+	beqz	t2, .Lmul_shift
+	add	t1, t1, a0
 
-mul_loop:
-  andi t2, a1, 1
-  beqz t2, 1f
-  add t1, t1, a0           # Add multiplicand to Product High
-1:
-  srli a3, a3, 1           # Shift Product Low right
-  slli t2, t1, 31          # Extract LSB of Product High
-  or a3, a3, t2            # Insert into MSB of Product Low
-  srli t1, t1, 1           # Shift Product High right
-  srli a1, a1, 1           # Shift Multiplier right
-  bnez a1, mul_loop        # Exactly 24 iterations until a1 == 0
+.Lmul_shift:
+	srli	a3, a3, 1
+	slli	t2, t1, 31		# carry the low bit of the high half
+	or	a3, a3, t2
+	srli	t1, t1, 1
+	srli	a1, a1, 1
+	bnez	a1, .Lmul_loop
 
-  # Right-align Product Low (a3) from bits [31:8] to bits [23:0]
-  srli a3, a3, 8
+	srli	a3, a3, 8		# right align the low half into [23:0]
+	addi	a2, a2, -127		# remove the doubled bias
 
-  # Apply exponent bias
-  addi a2, a2, -127
+	bgeu	t1, t0, .Lmul_shifted	# product already in [2.0, 4.0)
 
-  # Check normalization requirement (Product >= 2.0 vs < 2.0)
-  bgeu t1, t0, 1f          # If t1 >= 0x800000 (bit 23 set), product in [2.0, 4.0)
-  # Product in [1.0, 2.0): shift 48-bit product left by 1 bit
-  slli t1, t1, 1
-  srli t2, a3, 23          # Extract MSB of a3
-  or t1, t1, t2            # Bring into LSB of t1
-  slli a3, a3, 9           # Drop the bit just merged into t1, keeping 24 bits
-  srli a3, a3, 8
-  j 2f
-1:
-  # Product in [2.0, 4.0): increment exponent
-  addi a2, a2, 1
-2:
+	# Product is in [1.0, 2.0), so shift the whole 48-bit value left by one.
+	slli	t1, t1, 1
+	srli	t2, a3, 23
+	or	t1, t1, t2
+	slli	a3, a3, 9		# drop the bit just merged into t1
+	srli	a3, a3, 8
+	j	.Lmul_round
 
-  # Check for exponent underflow or overflow. a2 is the final biased exponent,
-  # so 254 is still finite; a negative a2 wraps and is caught by the unsigned test.
-  addi a5, x0, 255
-  bgeu a2, a5, und_ov_flow
-  beqz a2, tiny            # exponent 0 cannot be encoded as a normal
+.Lmul_shifted:
+	addi	a2, a2, 1
 
-  # Assemble unrounded result in a0
-  xor t1, t1, t0           # Clear implicit 1 (bit 23) from t1
-  slli a2, a2, 23          # Align exponent to bits [30:23]
-  add a0, a4, a2           # Merge sign (a4) and exponent (a2)
-  add a0, a0, t1           # Merge fraction bits [22:0]
+.Lmul_round:
+	# a2 is the final biased exponent, so 254 is still finite. A negative a2
+	# wraps and is caught by the same unsigned comparison.
+	addi	a5, x0, 255
+	bgeu	a2, a5, .Lund_ov_flow
+	beqz	a2, .Ltiny		# exponent 0 cannot encode a normal
 
-  # Round to nearest-even (RNE) using Guard bit in a3 (0x800000)
-  bltu a3, t0, exit        # If remainder < 0.5 (a3 < 0x800000), do not round up
-  addi a0, a0, 1           # Round up candidate
-  bne a3, t0, exit         # If remainder > 0.5, keep round up
-  andi a0, a0, -2          # Tie case (remainder == 0.5): round to even LSB
-exit:
-  ret
+	xor	t1, t1, t0		# clear the implicit 1
+	slli	a2, a2, 23
+	add	a0, a4, a2		# sign and exponent
+	add	a0, a0, t1		# fraction
 
-tiny:
-  # The true value is s * 2^-150, so the result is RNE(s/2). That reaches the
-  # minimum normal only for s == 0xFFFFFF, where the halfway case rounds to
-  # even; every other subnormal result is flushed to zero.
-  not a5, t1
-  slli a5, a5, 8           # zero only when all 24 significand bits are set
-  bnez a5, zero_denormal
-  lui a5, 0x00800
-  or a0, a4, a5            # signed minimum normal
-  ret
+	# Round to nearest, ties to even, with the guard bit at 0x800000 of a3.
+	bltu	a3, t0, .Lmul_done	# below half, so truncate
+	addi	a0, a0, 1
+	bne	a3, t0, .Lmul_done	# above half, so keep the increment
+	andi	a0, a0, -2		# exact tie, so clear the low bit
 
-und_ov_flow:
-  # Overflow (a2 > 0) vs Underflow (a2 <= 0)
-  blt x0, a2, inf
-  # Underflow: return signed zero
-  mv a0, a4
-  ret
+.Lmul_done:
+	ret
 
-zero_denormal:
-  mv a0, a4                # Return signed zero
-  ret
+.Ltiny:
+	# The true value is s * 2^-150, so the result is RNE(s/2). That reaches
+	# the minimum normal only for s == 0xFFFFFF, where the halfway case
+	# rounds to even. Every other subnormal result is flushed to zero.
+	not	a5, t1
+	slli	a5, a5, 8		# zero only if all 24 bits are set
+	bnez	a5, .Lzero_denormal
+	lui	a5, 0x00800
+	or	a0, a4, a5		# signed minimum normal
+	ret
 
-inf_nan:
-  slli a2, a2, 24          # Isolate exponent of A
-  slli a3, a3, 24          # Isolate exponent of B
-  beqz a2, nan             # Return NaN if A is 0 or denormal (0 * Inf)
-  beqz a3, nan             # Return NaN if B is 0 or denormal (Inf * 0)
-  slli a5, a5, 24          # Mask 0xFF000000 for NaN check
-  slli a3, a0, 1           # Clear sign of A
-  bltu a5, a3, nan         # Return NaN if A is NaN
-  slli a3, a1, 1           # Clear sign of B
-  bltu a5, a3, nan         # Return NaN if B is NaN
+.Lund_ov_flow:
+	blt	x0, a2, .Linf		# positive exponent means overflow
+	mv	a0, a4			# underflow gives a signed zero
+	ret
 
-inf:
-  lui a0, 0x7f800          # Load Inf exponent
-  or a0, a0, a4            # Apply sign
-  ret
+.Lzero_denormal:
+	mv	a0, a4			# signed zero
+	ret
 
-nan:
-  lui a0, 0x7fc00          # Quiet NaN
-  ret
+.Linf_nan:
+	slli	a2, a2, 24
+	slli	a3, a3, 24
+	beqz	a2, .Lnan		# 0 * Inf
+	beqz	a3, .Lnan		# Inf * 0
+	slli	a5, a5, 24		# 0xFF000000
+	slli	a3, a0, 1
+	bltu	a5, a3, .Lnan		# a is NaN
+	slli	a3, a1, 1
+	bltu	a5, a3, .Lnan		# b is NaN
 
-  .size __mulsf3, . - __mulsf3
+.Linf:
+	lui	a0, 0x7f800
+	or	a0, a0, a4		# signed infinity
+	ret
+
+.Lnan:
+	lui	a0, 0x7fc00		# canonical quiet NaN
+	ret
+
+	.size	__mulsf3, .-__mulsf3

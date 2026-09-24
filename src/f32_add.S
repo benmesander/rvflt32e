@@ -24,171 +24,205 @@
 # see the files LICENSE.txt and LICENSE-EXCEPTION.txt respectively.  If not, see
 # <http://www.gnu.org/licenses/>.
 
-.section .text.__addsf3, "ax", @progbits
-.p2align 1
-.globl  __addsf3
-.globl  __subsf3
-.type   __addsf3, @function
-.type   __subsf3, @function
+.globl	__addsf3
+.globl	__subsf3
+
+	.section .text.__addsf3, "ax", @progbits
+	.p2align 1
+	.type	__addsf3, @function
+	.type	__subsf3, @function
+
+################################################################################
+# routine: __subsf3
+#
+# IEEE 754 single precision subtraction. Flips the sign of the subtrahend and
+# falls straight into __addsf3, so the two are always linked together.
+#
+# input registers:
+# a0 = minuend
+# a1 = subtrahend
+#
+# output registers:
+# a0 = difference
+################################################################################
 
 __subsf3:
-  lui a5, 0x80000                                   # change sign
-  xor a1, a1, a5                                    # change sign of opB
-# Fall-through the addition without any jump
-  .size __subsf3, . - __subsf3
+	lui	a5, 0x80000
+	xor	a1, a1, a5		# negate b, then fall through
+
+	.size	__subsf3, .-__subsf3
+
+################################################################################
+# routine: __addsf3
+#
+# IEEE 754 single precision addition. The operands are ordered by magnitude so
+# the larger one supplies the result sign and exponent, then the smaller is
+# aligned and added or subtracted. Subnormals are flushed to zero, rounding is
+# to nearest with ties to even, and a canonical quiet NaN is returned for every
+# invalid case.
+#
+# input registers:
+# a0 = operand a
+# a1 = operand b
+#
+# output registers:
+# a0 = sum
+################################################################################
 
 __addsf3:
-  lui t1, 0x80000
-  xor t2, a0, a1                                    # Check if we will have an effective addition or subtraction
-  and a4, a0, t1                                    # Isolate the final sign of the sum
-  slli a2, a0, 1                                    # remove signA
-  slli a3, a1, 1                                    # remove signB
-# Swap operands and dominant sign if X < Y
-  bgeu a2, a3, 2f
-  and a4, a1, t1                                    # Isolate the final sign of the sum
-  slli a2, a1, 1                                    # remove signA
-  slli a3, a0, 1                                    # remove signB
-2:
-# The final sign is in a4
-  lui a5, 0xFF000                                   # load minimum pattern for {inf, NaN}
-  bgeu a2, a5, infnan                               # The greater number is inf or NaN, no info on the smaller
-  bgeu a3, a5, infnan                               # The smaller number is inf or NaN, the greater is not
-# Mandatory check to catch +-zero case before losing the info on the sign
-  beq a2, a3, equal                                 # branch if opA == opB # Do this check before zero operand!!!!
-# At this point the numbers in a2 and a3 are perfectly ordered, and are not special (they can be zero or denormal)
-# Prepare the mantissas, leaving space for the implicit 1 on the MSb
-  slli a0, a2, 7
-  slli a1, a3, 7
-# Isolate the exponents
-  srli a2, a2, 24                                   # logically isolate maxExp
-  srli a3, a3, 24                                   # logically isolate minExp
-# The two numbers are normal or denormal
-  beqz a2, both_zero_denormal                       # branch to a special case if the greater number is zero or denormal (both are)
-# The bigger number is normal, the lower is not special
-  sub t0, a2, a3                                    # compute (expA - expB)
-  or a0, a0, t1                                     # add the implicit 1 to the mantissaA
-  addi a2, a2, -1                                   # subtract one from MAX(exp). This is done becuse the implicit 1 is kept and the exponent added
-  beqz a3, return_a0                                # branch to a special case if Y is 0 or denormal
-  sltiu a3, t0, 26                                  # test if the lower is negligible (25 of exp diff is still ok if one of the operands is negative!)
-  beqz a3, return_a0                                # immediately return the greater number if the lower is negligible
-  or a1, a1, t1                                     # add the implicit 1 to the mantissaB
-sum:
-  srl a5, a1, t0                                    # shift right the lower operand by the exp diff
-  addi t0, t0, 1                                    # Count as it was shifted one more
-  neg t0, t0                                        # Save shifted out part plus the G bit
-  sll a1, a1, t0                                    # a1 was NOT shifted, the implicit bit is still in the MSb
-  bltz t2, diff_sign                                # Jump away if effective subtraction
-# No numerical cancellation possible, but possible normalization and overflow check required
-  add a0, a0, a5                                    # add the two operands (the second is shifted)
-pos_or_zero:
-  bgeu a0, a5, adjust                               # branch if we should not normalize
-  srli a0, a0, 1                                    # we should normalize -> right shift the sum by one to normalize
-  or a0, a0, t1                                     # Restore the implicit bit
-  addi a2, a2, 1                                    # add 1 to MAX(exp)
-  li a5, 254                                        # ready to check for ovf
-  bge a2, a5, inf                                   # branch if MAX(exp) >= 254 (ovf)
-# Adjust alignment before rounding
-adjust:
-  srli a1, a1, 1                                    # Count all the bits that were shifted out and do not appear in the sum. Put them to the right of the round bit
-  slli a3, a0, 24                                   # Save the bits that will be shifted out
-  or a3, a3, a1                                     # Restore the round bit, update its right bits
-return_a0:
-  srli a0, a0, 8                                    # Shift the sum to its final position. The implicit 1 will be added to the exponent
-# normalization already performed, no numerical cancellation -> round to nearest even
-rounding:
-  bltu a3, t1, exp_sign_and_exit                    # check if we can guess to round up (jump away if we do not round)
-  addi a0, a0, 1                                    # guess the first rounding (no need for normalization, everything's smooth because we add the exponent)
-  bne a3, t1, exp_sign_and_exit                     # check for a tie -> in the case, round to nearest even (if decimal bits are equal to 0.5, clear the LSB) (we have already added 1 in case of rounding)
-  andi a0, a0, -2                                   # Clear LSB
-exp_sign_and_exit:
-  slli a2, a2, 23                                   # bring MAX(exp) to its position in the sum
-  add a0, a0, a2                                    # bring MAX(exp) to its position in the sum
-sign_and_exit:
-  or a0, a0, a4                                     # add the correct sign
-exit:
-  ret                                               # return
+	lui	t1, 0x80000
+	xor	t2, a0, a1		# sign bit selects add versus subtract
+	and	a4, a0, t1		# provisional result sign
+	slli	a2, a0, 1		# magnitude of a
+	slli	a3, a1, 1		# magnitude of b
 
-# effective subtraction. If we are here, a3 = 0x80000000
-diff_sign:
-  snez a3, a1
-  or a5, a5, a3
-  sub a0, a0, a5                                    # sub the two operands (the second is shifted)
-# We know the correct final sign, and the result of the previous operation is positive
-# the addition gave positive or zero result (or we have in a0 the absolute value of the sum)
-  bltz a0, adjust                               # branch if we don't have numerical cancellation
-# normalization already performed, no numerical cancellation -> round to nearest even
+	# Swap so a2 holds the larger magnitude, and take the sign with it.
+	bgeu	a2, a3, .Lordered
+	and	a4, a1, t1
+	slli	a2, a1, 1
+	slli	a3, a0, 1
 
-# we had numerical cancellation, the shift was by 0 or 1. Everythin is contained in a0
-num_canc:
-# a5 keeps 0x00800000
-  slli a0, a0, 1                                    # left shift the sum
-  mv a5, a2                                         # save MAX(exp)
-  addi a2, a2, -1                                   # subtract one from MAX(exp)
-  beqz a5, signed_zero                              # jump if (MAX(exp) was 0) -> we have a denormal. Otherwise, maybe we can have soft cancellation with a normal result
-  bgeu a0, t1, adjust                               # jump if (MAX(exp) was not 0 && there is no more cancellation) -> soft cancellation -> maybe we need for a rounding
-# denormal_or_strong_cancellation:
-# clz inline replacement. No rounding necessary here
-clz_loop:
-  slli a0, a0, 1
-  addi a2, a2, -1
-  bltu a0, t1, clz_loop
-# Adjust the implicit 1 in the correct position
-  srli a0, a0, 8
-  bge a2, zero, exp_sign_and_exit                   # branch if the final exponent is lower than zero (denormal)
-signed_zero:
-  mv a0, a4                                         # add the sign
-  ret                                               # return signed zero
+.Lordered:
+	lui	a5, 0xFF000		# smallest {Inf, NaN} magnitude
+	bgeu	a2, a5, .Linf_nan
+	bgeu	a3, a5, .Linf_nan
 
-# Both numbers are zero/denormals
-both_zero_denormal:
- # and t2, t2, t1                                   # Denormal is signed 0, calc the correct sign, catching +0-0 = +0
-  xor t2, t2, t1
-  and a0, a4, t2
-zero_mantissa:
-  srli a0, a0, 31
-  slli a0, a0, 31
-  ret                                               # return
+	# Equal magnitudes must be caught before the zero test below, otherwise
+	# the sign of a +0 + -0 result is lost.
+	beq	a2, a3, .Lequal
 
-# Special case: unsigned opA == unsigned opB
-# in a0 and a1 we have the original values
-# a2 and a3 are not ordered wrt a0 and a1, but this is not important since the numbers are the same
-equal:
-  beq a0, a1, equal_samesign                        # are the signs equal too?
-.Lzero:
-  mv  a0, zero                                      # if not, the result is zero
-  ret                                               # return if the result was zero
-# a5 = 0xFF
-equal_samesign:
-  and a5, a5, a2                                    # the signs are equal. test unsigned opA (in a5 we have 0xFF)
-  beqz a5, zero_mantissa                            # branch if opA is a denormal (opA and opB are both denormal and are equal)
-# Special case: (unsigned opA == unsigned opB) && we have no denormals
-equal_nodenormal:
-  srli a2, a2, 24                                   # isolate the exponent in a convenient position
-  sltiu a5, a2, 0xFE                                # test if we can multiply the number by 2 with no ovf (check if the exponent is < 254)
-  beqz a5, 7f                                       # branch if we will overflow
-# a5 is 0
-  lui a5, 0x00800                                   # if we can multiply by 2 with no ovf, double the result
-  add a0, a0, a5                                    # if we can multiply by 2 with no ovf, double the result
-  ret                                               # return 2*opA if we do not ovf
-7:
-# a5 is 1
-  slli a5, a5, 31                                   # we will ovf: save the sign of opA
-  and a3, a5, a0                                    # we will ovf: save the sign of opA in a3
-# prepare the infinite
-inf:
-  lui a0, 0x7F800                                   # load unsigned infinite in the result
-  j sign_and_exit                                   # return the correct infinite
+	# Ordered, finite, and possibly zero or subnormal. Leave room for the
+	# implicit 1 at the top of each significand.
+	slli	a0, a2, 7
+	slli	a1, a3, 7
+	srli	a2, a2, 24		# larger exponent
+	srli	a3, a3, 24		# smaller exponent
+	beqz	a2, .Lboth_tiny		# larger is zero or subnormal, so both are
 
-# Special case: opA == {inf, NaN} and maybe also opB == {inf, NaN}
-infnan:
-  bgtu a2, a5, produce_nan
-  bne a2, a3, inf
+	sub	t0, a2, a3		# exponent difference
+	or	a0, a0, t1		# implicit 1 of the larger operand
+	addi	a2, a2, -1		# the kept implicit 1 adds one back later
+	beqz	a3, .Lreturn_a0		# smaller is zero or subnormal
+	sltiu	a3, t0, 26		# 25 still matters when signs differ
+	beqz	a3, .Lreturn_a0		# smaller operand cannot affect the sum
+	or	a1, a1, t1		# implicit 1 of the smaller operand
 
-inf_inf:
-  beq a0, a1, exit
-produce_nan:
-# a5 = 0xFF000
-  lui a0, 0x7FC00
-  ret                                               # return quiet NaN
+	srl	a5, a1, t0		# align the smaller operand
+	addi	t0, t0, 1
+	neg	t0, t0
+	sll	a1, a1, t0		# bits shifted out, plus the guard bit
+	bltz	t2, .Ldiff_sign
 
-  .size __addsf3, . - __addsf3
+	# Effective addition, so no cancellation, but it may overflow by one bit.
+	add	a0, a0, a5
+	bgeu	a0, a5, .Ladjust	# no renormalization needed
+	srli	a0, a0, 1
+	or	a0, a0, t1		# restore the implicit bit
+	addi	a2, a2, 1
+	li	a5, 254
+	bge	a2, a5, .Linf
+
+.Ladjust:
+	# Collect the bits that fell out of the sum to the right of the round
+	# bit, so the rounding decision below sees a correct sticky value.
+	srli	a1, a1, 1
+	slli	a3, a0, 24
+	or	a3, a3, a1
+
+.Lreturn_a0:
+	srli	a0, a0, 8		# implicit 1 lands on the exponent
+
+	# Round to nearest, ties to even.
+	bltu	a3, t1, .Lexp_sign_and_exit
+	addi	a0, a0, 1
+	bne	a3, t1, .Lexp_sign_and_exit
+	andi	a0, a0, -2		# exact tie, so clear the low bit
+
+.Lexp_sign_and_exit:
+	slli	a2, a2, 23
+	add	a0, a0, a2
+
+.Lsign_and_exit:
+	or	a0, a0, a4
+
+.Ldone:
+	ret
+
+.Ldiff_sign:
+	# Effective subtraction. Fold the discarded bits into a sticky bit so
+	# the subtraction borrows correctly.
+	snez	a3, a1
+	or	a5, a5, a3
+	sub	a0, a0, a5
+	bltz	a0, .Ladjust		# no cancellation, so just round
+
+	# Cancellation happened, and the alignment shift was 0 or 1, so the
+	# whole result is still in a0.
+	slli	a0, a0, 1
+	mv	a5, a2			# remember the larger exponent
+	addi	a2, a2, -1
+	beqz	a5, .Lsigned_zero	# exponent was 0, so the result is tiny
+	bgeu	a0, t1, .Ladjust	# only mild cancellation, so round
+
+	# Strong cancellation. This is an inline count-leading-zeros; no
+	# rounding is needed because every remaining bit is already exact.
+.Lclz_loop:
+	slli	a0, a0, 1
+	addi	a2, a2, -1
+	bltu	a0, t1, .Lclz_loop
+
+	srli	a0, a0, 8
+	bge	a2, zero, .Lexp_sign_and_exit	# still normal, so finish
+					# otherwise fall through and flush
+
+.Lsigned_zero:
+	mv	a0, a4
+	ret
+
+.Lboth_tiny:
+	# Both operands are zero or subnormal. Under flush to zero the result
+	# is a zero whose sign is negative only if both operands were negative,
+	# which keeps +0 + -0 positive.
+	xor	t2, t2, t1
+	and	a0, a4, t2
+
+.Lzero_mantissa:
+	srli	a0, a0, 31
+	slli	a0, a0, 31
+	ret
+
+.Lequal:
+	# The magnitudes match. a0 and a1 still hold the original operands, and
+	# a2 and a3 are interchangeable because the magnitudes are the same.
+	beq	a0, a1, .Lequal_samesign
+	mv	a0, zero		# opposite signs cancel exactly
+	ret
+
+.Lequal_samesign:
+	# a5 still holds 0xFF000000, so this isolates the exponent field.
+	and	a5, a5, a2
+	beqz	a5, .Lzero_mantissa	# both operands are subnormal
+
+	srli	a2, a2, 24
+	sltiu	a5, a2, 0xFE		# can the exponent absorb a doubling?
+	beqz	a5, .Linf
+	lui	a5, 0x00800
+	add	a0, a0, a5		# doubling is just exponent plus one
+	ret
+
+.Linf:
+	lui	a0, 0x7F800
+	j	.Lsign_and_exit
+
+.Linf_nan:
+	# The larger magnitude is Inf or NaN; nothing is known about the smaller
+	# one yet beyond it being no larger.
+	bgtu	a2, a5, .Lproduce_nan	# larger operand is NaN
+	bne	a2, a3, .Linf		# smaller one is finite
+	beq	a0, a1, .Ldone		# two identical infinities
+
+.Lproduce_nan:
+	lui	a0, 0x7FC00		# canonical quiet NaN
+	ret
+
+	.size	__addsf3, .-__addsf3

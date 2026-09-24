@@ -24,141 +24,145 @@
 # see the files LICENSE.txt and LICENSE-EXCEPTION.txt respectively.  If not, see
 # <http://www.gnu.org/licenses/>.  */
 
-.section .text.__divsf3, "ax", @progbits
-.p2align 1
-.globl __divsf3
-.type __divsf3, @function
+.globl	__divsf3
+
+	.section .text.__divsf3, "ax", @progbits
+	.p2align 1
+	.type	__divsf3, @function
+
+################################################################################
+# routine: __divsf3
+#
+# IEEE 754 single precision division, using a restoring division loop that
+# produces one quotient bit per iteration and needs no M extension.
+# Subnormals are flushed to zero, rounding is to nearest with ties to even,
+# and a canonical quiet NaN is returned for every invalid case.
+#
+# input registers:
+# a0 = dividend
+# a1 = divisor
+#
+# output registers:
+# a0 = quotient
+################################################################################
 
 __divsf3:
-  # Determine the final sign
-  lui t0, 0x80000        # Load the sign mask
-  # Check special cases
-  li a5, 0xff            # Load the exponent mask
-  srli a2, a0, 23        # Isolate X's sign and exponent
-  and a2, a2, a5         # Isolate X's exponent
-  srli a3, a1, 23        # Isolate Y's sign and exponent
-  and a3, a3, a5         # Isolate Y's exponent
-  beq a2, a5, inf_nan    # Jump if A is Inf/NaN
-  beq a3, a5, inf_nan    # Jump if B is Inf/NaN
-  beqz a2, zero_denormal # Jump if A is zero/denormal
-  beqz a3, zero_denormal # Jump if B is zero/denormal
+	lui	t0, 0x80000		# sign mask, 0x80000000
+	li	a5, 0xff		# exponent mask
+	srli	a2, a0, 23
+	and	a2, a2, a5		# exp(x)
+	srli	a3, a1, 23
+	and	a3, a3, a5		# exp(y)
+	beq	a2, a5, .Linf_nan
+	beq	a3, a5, .Linf_nan
+	beqz	a2, .Lzero_denormal
+	beqz	a3, .Lzero_denormal
 
-normal_case:
-  # Subtract Y exponent from X exponent together
-  sub a2, a2, a3
+	sub	a2, a2, a3		# exp(x) - exp(y)
+	xor	t2, a0, a1		# final sign
 
-  # Preserve the final sign
-  xor t2, a0, a1         # Determine the final sign
+	# Build the significands as fixed point integers, implicit 1 at bit 28.
+	slli	a0, a0, 9
+	slli	a1, a1, 9
+	lui	a3, 0x10000
+	srli	a0, a0, 4
+	srli	a1, a1, 4
+	or	a1, a1, a3		# divisor
+	or	a3, a3, a0		# dividend
 
-  # Convert mantissa to unsigned integer
-  # Dividend in a3, divisor in a1
-  slli a0, a0, 9         # Isolate X's mantissa
-  slli a1, a1, 9         # Isolate Y's mantissa
-  lui a3, 0x10000        # Prepare the implicit 1
-  srli a0, a0, 4
-  srli a1, a1, 4
-  or a1, a1, a3          # Add implicit 1 to dividend (a3) and divisor (a1)
-  or a3, a3, a0
+	and	a0, t2, t0		# seed the result with the sign
 
-  # Initialize the result with the final sign
-  and a0, t2, t0         # Isolate the sign
+	# Bias the exponent, and pre-shift the dividend if it is smaller than
+	# the divisor so the first quotient bit is always significant.
+	slt	a5, a3, a1
+	sll	a3, a3, a5
+	addi	a2, a2, 126		# one less, the implicit 1 adds the rest
+	sub	a2, a2, a5
 
-  # Add exponent bias and check if dividend < divisor
-  # If no, left shift dividend and adjut the exponent accordingly
-  slt a5, a3, a1
-  sll a3, a3, a5
-  addi a2, a2, 126       # Add one less as we will add also the implicit 1 to the exponent
-  sub a2, a2, a5         # Subtract one if needed
+	lui	a5, 0x00800		# first quotient bit, at bit 23
 
-  # Condensed division loop
-  lui a5, 0x00800
-div_loop_start:
-  blt a3, a1, 1f
-  sub a3, a3, a1
-  or a0, a0, a5
-1:
-  slli a3, a3, 1
-  beqz a3, div_loop_exit
-  srli a5, a5, 1
-  bnez a5, div_loop_start
+.Ldiv_loop:
+	blt	a3, a1, .Ldiv_shift
+	sub	a3, a3, a1
+	or	a0, a0, a5
 
-div_loop_exit:
-  # Check for under/overflow
-  li t2, 254
-  bgeu a2, t2, und_ov_flow
+.Ldiv_shift:
+	slli	a3, a3, 1
+	beqz	a3, .Ldiv_exit		# remainder is zero, division is exact
+	srli	a5, a5, 1
+	bnez	a5, .Ldiv_loop
 
-  # Round the result and merge the final exponent
-  slli a2, a2, 23
-  add a0, a0, a2
-  bltu a3, a1, exit
-  addi a0, a0, 1
-  bne a3, a1, exit
-  andi a0, a0, -2
-exit:
-  ret
+.Ldiv_exit:
+	li	t2, 254
+	bgeu	a2, t2, .Lund_ov_flow
 
-und_ov_flow:
-  # Overflow?
-  bgtz a2, ovf         # If here, a2 is either in ovf (> 0) or in underflow (<= 0)
-  # Underflow. At a final exponent of 0 the true value is q * 2^-150, so the
-  # result is RNE(q/2); that reaches the minimum normal only for q == 0xFFFFFF,
-  # where the halfway case rounds to even. Everything else flushes to zero.
-  li t2, -1
-  bne a2, t2, .Lzero_signed
-  not t2, a0
-  slli t2, t2, 8       # zero only when all 24 quotient bits are set
-  bnez t2, .Lzero_signed
-  srli a0, a0, 31
-  slli a0, a0, 31
-  lui t2, 0x00800
-  or a0, a0, t2        # signed minimum normal
-  ret
+	slli	a2, a2, 23
+	add	a0, a0, a2		# merge the exponent
+
+	# Round to nearest, ties to even. The doubled remainder sits in a3 and
+	# the divisor in a1, so they compare directly against one half.
+	bltu	a3, a1, .Ldiv_done
+	addi	a0, a0, 1
+	bne	a3, a1, .Ldiv_done
+	andi	a0, a0, -2
+
+.Ldiv_done:
+	ret
+
+.Lund_ov_flow:
+	bgtz	a2, .Lovf		# positive exponent means overflow
+
+	# Underflow. At a final exponent of 0 the true value is q * 2^-150, so
+	# the result is RNE(q/2). That reaches the minimum normal only for
+	# q == 0xFFFFFF, where the halfway case rounds to even. Everything else
+	# in that binade flushes to zero.
+	li	t2, -1
+	bne	a2, t2, .Lzero_signed
+	not	t2, a0
+	slli	t2, t2, 8		# zero only if all 24 bits are set
+	bnez	t2, .Lzero_signed
+	srli	a0, a0, 31
+	slli	a0, a0, 31
+	lui	t2, 0x00800
+	or	a0, a0, t2		# signed minimum normal
+	ret
+
 .Lzero_signed:
-  srli a0, a0, 31
-  slli a0, a0, 31
-  # Return signed 0
-  ret
+	srli	a0, a0, 31
+	slli	a0, a0, 31		# signed zero
+	ret
 
-zero_denormal:
-# Here, one or more arguments are either denormalized or zero.
-  bnez a2, inf         # Jump to Inf if X is not zero (Y is 0)
-# X == 0
-  beqz a3, nan         # Return NaN if 0/0
-# Result is 0, but determine sign anyway.
+.Lzero_denormal:
+	# One or both operands are zero or subnormal.
+	bnez	a2, .Linf		# x is non-zero, so y is zero
+	beqz	a3, .Lnan		# 0 / 0
+
 .Lzero:
-  xor a0, a0, a1       # Determine the correct sign of the multiplication
-# t0 = 0x80000
-  and a0, a0, t0       # Append Zero
-  ret
+	xor	a0, a0, a1
+	and	a0, a0, t0		# signed zero
+	ret
 
-  # One or both args are INF or NAN.
-inf_nan:
-  slli a5, a5, 24      # Prepare the mask for NaN
-# Check for NaN first
-  slli a2, a0, 1       # Eliminate the sign of A
-  bltu a5, a2, nan     # Return NaN if A is NaN
-  slli a3, a1, 1       # Eliminate the sign of B
-  bltu a5, a3, nan     # Return NaN if B is NaN
-# Check for Inf
-  beq a2, a3, nan      # They are both Inf -> return NaN
-# There is only one Inf.
-  beq a3, a5, .Lzero   # Y is an inf, return zero
-# X is inf, Y is a number. Result is INF, but we need to determine its sign.
-inf:
-  xor a0, a0, a1       # Put the correct sign into a0
-  # Overflow: return Inf (sign already in a0).
-ovf:
-# t0 = 0x80000
-  and a0, a0, t0       # Isolate the sign
-  lui t0, 0x7f800      # Set max exponent
-  or a0, a0, t0        # Set max exponent
-  ret                  # Return
+.Linf_nan:
+	slli	a5, a5, 24		# 0xFF000000
+	slli	a2, a0, 1
+	bltu	a5, a2, .Lnan		# x is NaN
+	slli	a3, a1, 1
+	bltu	a5, a3, .Lnan		# y is NaN
+	beq	a2, a3, .Lnan		# Inf / Inf
+	beq	a3, a5, .Lzero		# finite / Inf
 
-# Return a quiet NaN.
-nan:
-  lui a0, 0x7fc00
-  ret
+.Linf:
+	xor	a0, a0, a1		# sign of the result
 
-  .size __divsf3, . - __divsf3
+.Lovf:
+	and	a0, a0, t0		# keep only the sign
+	lui	t0, 0x7f800
+	or	a0, a0, t0		# signed infinity
+	ret
 
-	
+.Lnan:
+	lui	a0, 0x7fc00		# canonical quiet NaN
+	ret
+
+	.size	__divsf3, .-__divsf3
+

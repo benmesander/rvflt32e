@@ -6,13 +6,11 @@
 #ifndef RVFLT32E_H
 #define RVFLT32E_H
 
-#ifdef __c51__ /* C51 guard / placeholder */
-#elif defined(__cplusplus)
+#include <stdint.h>
+
+#ifdef __cplusplus
 extern "C" {
 #endif
-
-/* Ensure standard fixed-width types */
-#include <stdint.h>
 
 /* --------------------------------------------------------------------------
  * Floating-Point Arithmetic Routines (__addsf3, __subsf3, __mulsf3, __divsf3)

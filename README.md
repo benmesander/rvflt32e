@@ -11,4 +11,4 @@ In order to make this code feasible, the implementation is minimal. In particula
 
 The code is tested with the Berkely Softfloat package. (todo: links, description)
 
-The core algorithms are based upon the excellent [RVfplib](https://github.com/pulp-platform/RVfplib)
+The core algorithms are based upon the excellent [RVfplib](https://github.com/pulp-platform/RVfplib) . I was going to write my own, but this code was so good I decided to fork it and keep it alive as it has been archived.

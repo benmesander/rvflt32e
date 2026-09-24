@@ -162,16 +162,31 @@ and it needs no external tooling.
 - [ ] **#18 — Header: `#include <stdint.h>` sits inside `extern "C"`.**
   Move the system include above the linkage block.
 
-- [ ] **#19 — `f32_mul.S` is missing its license header and `.size` directive.**
-  It is the only source without the GPL + Runtime Library Exception banner, and
-  has no `.size __mulsf3, . - __mulsf3`. The missing banner is a real distribution
-  concern for a GPL-with-exception library.
+- [ ] **#19 — `f32_mul.S` is missing its license header.**
+  It is the only source without the GPL + Runtime Library Exception banner, which
+  is a real distribution concern for a GPL-with-exception library. The missing
+  `.size __mulsf3` part of this item is done.
 
 - [ ] **#20 — Copyright attribution on the newer files.**
   `f32_cmp.S` and `f32_conv.S` carry "Copyright ETH Zurich 2020 / Author: Matteo
   Perotti", but their style, label convention, and algorithms differ markedly from
   the RVfplib-derived `f32_add.S`/`f32_div.S`. If written fresh, drop the ETH
   attribution; if derived, `f32_mul.S` needs it too. Worth getting right.
+
+---
+
+## Settled decisions
+
+Recorded so they are not reopened.
+
+- **Source files are not split one-routine-per-file.** `f32_cmp.S` holds seven
+  routines and `f32_conv.S` four, so without `-Wl,--gc-sections` a caller pulls in
+  neighbours it does not use (64–202 bytes). Splitting would recover that through
+  archive-member granularity alone, but every routine already has its own
+  `.text.<name>` section, gc-sections costs nothing and does not inhibit linker
+  relaxation, and CH32V003 toolchains enable it by default. Keeping related code
+  together wins over ~7 near-empty source files. The requirement is documented in
+  the README rather than worked around in the tree.
 
 - [ ] **Minor — `__subsf3` `.size` is computed at end of file**, so it spans
   `__addsf3` too. Should end where `__addsf3` begins.

@@ -11,6 +11,38 @@ In order to make this code feasible, the implementation is minimal. In particula
 
 The code is tested with the Berkely Softfloat package. (todo: links, description)
 
+## Linking only what you use
+
+Every routine is emitted into its own `.text.<name>` section, so link with
+garbage collection enabled:
+
+```
+-Wl,--gc-sections
+```
+
+This matters because several routines share a translation unit. Measured cost of
+pulling in a single routine, `rv32ec`/`ilp32e`, whole program including startup:
+
+| Routine | without `--gc-sections` | with |
+| --- | ---: | ---: |
+| `__unordsf2` | 160 | 42 |
+| `__eqsf2` | 160 | 54 |
+| `__ltsf2` | 160 | 96 |
+| `__floatunsisf` | 272 | 70 |
+| `__fixunssfsi` | 272 | 88 |
+| `__fixsfsi` | 272 | 120 |
+| `__addsf3` | 296 | 296 |
+
+There is no penalty for the single-routine objects, and linker relaxation is
+unaffected. The whole library is 1182 bytes of `.text` if you use all of it.
+
+Some routines unavoidably pull in a neighbour because they share code:
+
+- `__subsf3` falls through into `__addsf3`.
+- `__floatsisf` branches into `__floatunsisf` for the normalise and pack step.
+- `__ltsf2`, `__lesf2`, `__gtsf2` and `__gesf2` share one comparison core.
+- `__eqsf2`/`__nesf2` and `__unordsf2` are independent of the above.
+
 ## Testing
 
 ```sh

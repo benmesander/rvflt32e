@@ -44,10 +44,9 @@
  * Integer to Float Conversions (__floatsisf, __floatunsisf)
  * ------------------------------------------------------------------- */
     .section .text.__floatsisf, "ax", @progbits
+    .p2align 1
     .globl __floatsisf
-    .globl __floatunsisf
     .type __floatsisf, @function
-    .type __floatunsisf, @function
 
 __floatsisf:
     # If input integer is zero, return 0.0 directly
@@ -67,6 +66,7 @@ __floatsisf:
     .size __floatsisf, . - __floatsisf
 
     .section .text.__floatunsisf, "ax", @progbits
+    .p2align 1
     .globl __floatunsisf
     .type __floatunsisf, @function
 
@@ -115,6 +115,7 @@ __floatunsisf:
  * Float to Integer Conversions (__fixsfsi, __fixunssfsi)
  * ------------------------------------------------------------------- */
     .section .text.__fixsfsi, "ax", @progbits
+    .p2align 1
     .globl __fixsfsi
     .type __fixsfsi, @function
 
@@ -166,6 +167,7 @@ __fixsfsi:
     .size __fixsfsi, . - __fixsfsi
 
     .section .text.__fixunssfsi, "ax", @progbits
+    .p2align 1
     .globl __fixunssfsi
     .type __fixunssfsi, @function
 

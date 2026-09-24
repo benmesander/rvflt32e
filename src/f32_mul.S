@@ -6,8 +6,8 @@
  * Flushes denormals to zero, rounds to nearest-even (RNE), and returns canonical quiet NaNs.
  */
 
-.text
 .section .text.__mulsf3, "ax", @progbits
+.p2align 1
 .globl __mulsf3
 .type __mulsf3, @function
 
@@ -142,3 +142,5 @@ inf:
 nan:
   lui a0, 0x7fc00          # Quiet NaN
   ret
+
+  .size __mulsf3, . - __mulsf3

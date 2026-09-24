@@ -41,6 +41,7 @@
 
     .text
     .section .text.__mulsi3, "ax", @progbits
+    .p2align 1
     .globl __mulsi3
     .type __mulsi3, @function
 

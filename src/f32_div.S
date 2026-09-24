@@ -24,9 +24,9 @@
 # see the files LICENSE.txt and LICENSE-EXCEPTION.txt respectively.  If not, see
 # <http://www.gnu.org/licenses/>.  */
 
-.text
 .section .text.__divsf3, "ax", @progbits
-.global __divsf3
+.p2align 1
+.globl __divsf3
 .type __divsf3, @function
 
 __divsf3:
@@ -158,5 +158,7 @@ ovf:
 nan:
   lui a0, 0x7fc00
   ret
+
+  .size __divsf3, . - __divsf3
 
 	

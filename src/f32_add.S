@@ -24,8 +24,8 @@
 # see the files LICENSE.txt and LICENSE-EXCEPTION.txt respectively.  If not, see
 # <http://www.gnu.org/licenses/>.
 
-.text
 .section .text.__addsf3, "ax", @progbits
+.p2align 1
 .globl  __addsf3
 .globl  __subsf3
 .type   __addsf3, @function
@@ -35,6 +35,7 @@ __subsf3:
   lui a5, 0x80000                                   # change sign
   xor a1, a1, a5                                    # change sign of opB
 # Fall-through the addition without any jump
+  .size __subsf3, . - __subsf3
 
 __addsf3:
   lui t1, 0x80000
@@ -190,5 +191,4 @@ produce_nan:
   lui a0, 0x7FC00
   ret                                               # return quiet NaN
 
-  .size __subsf3, . - __subsf3
   .size __addsf3, . - __addsf3

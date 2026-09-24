@@ -42,6 +42,7 @@
  * Equal / Not Equal (__eqsf2, __nesf2)
  * ------------------------------------------------------------------- */
     .section .text.__eqsf2, "ax", @progbits
+    .p2align 1
     .globl __eqsf2
     .globl __nesf2
     .type __eqsf2, @function
@@ -75,6 +76,7 @@ __nesf2:
  * share one core and differ only in the value produced for NaN.
  * ------------------------------------------------------------------- */
     .section .text.__ltsf2, "ax", @progbits
+    .p2align 1
     .globl __ltsf2
     .globl __lesf2
     .type __ltsf2, @function
@@ -84,8 +86,6 @@ __ltsf2:
 __lesf2:
     li      t0, 1               # unordered must make "a < b" false
     j       .Lcmp
-    .size __ltsf2, . - __ltsf2
-    .size __lesf2, . - __lesf2
 
 
 /* Greater Than / Greater Than or Equal share the core below; they cannot be
@@ -131,6 +131,9 @@ __gesf2:
 .Lcmp_unord:
     mv      a0, t0
     ret
+    # All four entry points run into the shared core, so their extents overlap.
+    .size __ltsf2, . - __ltsf2
+    .size __lesf2, . - __lesf2
     .size __gtsf2, . - __gtsf2
     .size __gesf2, . - __gesf2
 
@@ -139,6 +142,7 @@ __gesf2:
  * Unordered predicate (__unordsf2)
  * ------------------------------------------------------------------- */
     .section .text.__unordsf2, "ax", @progbits
+    .p2align 1
     .globl __unordsf2
     .type __unordsf2, @function
 

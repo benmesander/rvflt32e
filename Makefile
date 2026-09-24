@@ -8,27 +8,26 @@ CROSS_COMPILE ?= riscv64-unknown-elf-
 CC            := $(CROSS_COMPILE)gcc
 AR            := $(CROSS_COMPILE)ar
 SIZE          := $(CROSS_COMPILE)size
+HOSTCC        ?= cc
 
-# Simulator configuration - XXX fix this
+# Simulator configuration. The harness is freestanding and talks to spike over
+# HTIF directly, so no proxy kernel is required.
 SPIKE         ?= spike
-PK	      ?= $(if $(PK_PATH),$(PK_PATH),/Users/ben/src/riscv-pk/build/pk)
 
 # Assembly Library Flags (Strict RV32EC architecture & register enforcement)
 # rv32e supports only the ilp32e ABI; gcc errors and clang ignores anything else.
 ARCH_FLAGS    := -march=rv32ec -mabi=ilp32e
 CFLAGS        := $(ARCH_FLAGS) -Os -Wall -Wextra -ffunction-sections -fdata-sections -fno-builtin -Iinclude
 
-# Test Runner C Flags (Standard ilp32 multilib for toolchain compatibility)
-TEST_CFLAGS   := -march=rv32ic -mabi=ilp32 -Os -Wall -Wextra -Iinclude
-# The library is RVE-tagged, the pk-hosted harness is not. Safe only because every
-# routine passes <=2 words in a0/a1, touches no stack, and uses only a0-a5/t0-t2.
-LDFLAGS       := -Wl,--no-warn-mismatch
+# Number of randomised cases per operation in the generated reference vectors.
+VEC_RANDOM    ?= 20000
 
 # Directories
 SRC_DIR       := src
 INC_DIR       := include
 TEST_DIR      := tests
 BUILD_DIR     := build
+TEST_BUILD    := $(BUILD_DIR)/tests
 LIB_DIR       := lib
 
 # Target Library Name
@@ -39,10 +38,21 @@ TARGET_LIB    := $(LIB_DIR)/$(LIB_NAME)
 SRCS          := $(wildcard $(SRC_DIR)/*.S)
 OBJS          := $(patsubst $(SRC_DIR)/%.S, $(BUILD_DIR)/%.o, $(SRCS))
 
-# Test Sources and Executable
-TEST_SRCS     := $(wildcard $(TEST_DIR)/*.c)
-TEST_OBJS     := $(patsubst $(TEST_DIR)/%.c, $(BUILD_DIR)/%.o, $(TEST_SRCS))
-TEST_ELF      := $(BUILD_DIR)/test_runner.elf
+# Test harness. Freestanding and linked without libc or libgcc, which lets it
+# run at the library's real rv32ec/ilp32e target rather than a compatible one.
+#
+# Every generated artifact lives under a directory named for VEC_RANDOM. That
+# makes a change of vector count a change of path rather than a timestamp
+# comparison, which make cannot get wrong.
+VEC_DIR       := $(TEST_BUILD)/vec-$(VEC_RANDOM)
+TEST_CFLAGS   := $(ARCH_FLAGS) -Os -Wall -Wextra -ffreestanding \
+                 -I$(VEC_DIR) -I$(INC_DIR)
+TEST_LDFLAGS  := -nostdlib -nostartfiles -T $(TEST_DIR)/spike.ld \
+                 -Wl,--no-warn-rwx-segments
+GEN           := $(TEST_BUILD)/gen
+VECTORS       := $(VEC_DIR)/vectors.h
+TEST_OBJS     := $(VEC_DIR)/start.o $(VEC_DIR)/spike_main.o
+TEST_ELF      := $(VEC_DIR)/spike_test.elf
 
 # Default Rule
 .PHONY: all
@@ -62,33 +72,37 @@ $(BUILD_DIR)/%.o: $(SRC_DIR)/%.S | $(BUILD_DIR)
 	@echo "  AS      $<"
 	@$(CC) $(CFLAGS) -c $< -o $@
 
-# Compile test C sources (.c -> .o) using standard rv32ic/ilp32
-$(BUILD_DIR)/%.o: $(TEST_DIR)/%.c | $(BUILD_DIR)
+# Build and run the host-side reference vector generator
+$(GEN): $(TEST_DIR)/gen.c | $(TEST_BUILD)
+	@echo "  HOSTCC  $<"
+	@$(HOSTCC) -O2 -Wall -o $@ $<
+
+$(VECTORS): $(GEN) | $(VEC_DIR)
+	@echo "  GEN     $@ ($(VEC_RANDOM) random cases/op)"
+	@$(GEN) $@ $(VEC_RANDOM)
+
+# Compile the target-side harness
+$(VEC_DIR)/spike_main.o: $(TEST_DIR)/spike_main.c $(VECTORS) | $(VEC_DIR)
 	@echo "  CC      $<"
 	@$(CC) $(TEST_CFLAGS) -c $< -o $@
 
-# Link test runner executable with --no-warn-mismatch
+$(VEC_DIR)/start.o: $(TEST_DIR)/start.S | $(VEC_DIR)
+	@echo "  AS      $<"
+	@$(CC) $(ARCH_FLAGS) -c $< -o $@
+
 $(TEST_ELF): $(TEST_OBJS) $(TARGET_LIB)
 	@echo "  LINK    $@"
-	@$(CC) $(TEST_CFLAGS) $(LDFLAGS) $^ -o $@
+	@$(CC) $(ARCH_FLAGS) $(TEST_LDFLAGS) $^ -o $@
 
 # Create required output directories
-$(BUILD_DIR) $(LIB_DIR):
+$(BUILD_DIR) $(TEST_BUILD) $(VEC_DIR) $(LIB_DIR):
 	@mkdir -p $@
 
-# Run tests in Spike using standard RV32IC architecture
+# Run the conformance suite under spike
 .PHONY: test
 test: $(TEST_ELF)
-	@echo "=== Running Spike Simulation ==="
-	$(SPIKE) --isa=rv32ic $(PK) $(TEST_ELF)
-
-# Stream host-generated TestFloat vectors into Spike stdin
-OP ?= f32_add
-FLAGS ?= -level 2
-.PHONY: testfloat-stream
-testfloat-stream: $(TEST_ELF)
-	@echo "=== Streaming TestFloat ($(OP)) into Spike ==="
-	testfloat_gen $(OP) $(FLAGS) | $(SPIKE) --isa=rv32ic $(PK) $(TEST_ELF)
+	@echo "=== Running conformance suite (spike, rv32ec) ==="
+	@$(SPIKE) --isa=rv32ec $(TEST_ELF)
 
 # Disassemble built library objects for inspection
 .PHONY: disasm

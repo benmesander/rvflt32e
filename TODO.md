@@ -2,12 +2,11 @@
 
 Items from the 2026-09-24 code review. Numbering matches the original review.
 
-Already resolved: #1–#9 and #23–#24 (all P0 correctness), #10 (partial —
-`-mabi=ilp32e`), #21 (stray `f32_conv.S~`), #22 (naming).
+Already resolved: #1–#12, #14, #21–#24.
 
-Verified under spike against 249,859 host-generated IEEE-754 reference checks:
-**0 failures**. The same suite reports 58,029 failures on the pre-fix sources.
-Strict `-march=rv32ec -mabi=ilp32e` build is 1182 bytes of `.text`.
+Verified under spike at the library's real `rv32ec`/`ilp32e` target via
+`make test`: 305,775 checks, **0 failures**. Strict build is 1182 bytes of
+`.text`.
 
 ---
 
@@ -89,56 +88,48 @@ Strict `-march=rv32ec -mabi=ilp32e` build is 1182 bytes of `.text`.
 Do the tier-1 vector table **first** — every P0 item above is detectable with it,
 and it needs no external tooling.
 
-- [ ] **#14 — Test coverage is effectively nil.**
-  `tests/main_test.c` runs 4 add vectors. `test_f32_sub`, `test_f32_mul`,
-  `test_f32_div`, `test_f32_eq`, `test_f32_lt` in `tests/test_bridge.c` are never
-  called, and there is no bridge at all for the conversion routines.
-  A working bare-metal spike harness already exists in `/tmp/rvtest` (host-side
-  reference generator, HTIF console, linker script, `_start`) and is what proved
-  #1–#9. It needs no pk and no newlib. Landing it in `tests/` is the single
-  highest-value remaining task.
+- [x] **#14 — Test coverage.**
+  `make test` now builds a freestanding harness (`tests/gen.c`,
+  `tests/spike_main.c`, `tests/start.S`, `tests/spike.ld`) and runs 305,775
+  checks under spike in a few seconds, covering every routine. Verified by
+  mutation: reverting the #9 rounding mask and breaking the `f32_cmp.S` NaN test
+  produces 11,549 failures.
+  The superseded 4-vector `tests/main_test.c` was removed. `tests/test_bridge.c`
+  is still unused and is kept only for the TestFloat work in #13.
 
-- [ ] **#10 (remainder) — Decide the simulation strategy.**
-  `-mabi=ilp32e` is now correct and the library objects are properly RVE-tagged
-  (`Flags: 0x9, RVC, RVE`). What remains is the test link: an RVE library into a
-  non-RVE rv32ic/ilp32 harness, silenced by `-Wl,--no-warn-mismatch`.
-  Safe *today* only because every routine passes ≤2 words in `a0`/`a1`, touches no
-  stack, and uses only `a0`–`a5`/`t0`–`t2`. Two options:
-  - **Option A (recommended): bare-metal spike, no pk.** Spike runs a bare ELF
-    that exports `tohost`/`fromhost`. Needs a ~20-line `_start`, HTIF
-    `getchar`/`putchar`, and a linker script at `0x80000000`. Lets you build
-    everything `rv32ec/ilp32e` and drop `--no-warn-mismatch`. Critically, it
-    avoids needing an rv32e newlib multilib, which the stock toolchains do not ship.
-    Confirmed: `riscv64-unknown-elf-gcc -print-multi-lib` on the installed
-    Homebrew toolchain offers only rv32i/rv32im/rv32iac/rv32imac with ilp32.
-    Note spike's HTIF console does not acknowledge via `fromhost`; poll `tohost`
-    for drain instead, or output hangs after the first character.
-  - **Option B: keep pk**, keep the justified `--no-warn-mismatch`. Least effort.
-    Note `riscv-pk` is not currently installed.
+- [x] **#10 — Simulation strategy resolved.**
+  The harness is freestanding, so the whole test binary links at `rv32ec`/`ilp32e`
+  (`Tag_RISCV_arch: rv32e2p0_c2p0_zca1p0`, no libc or libgcc). The
+  `-Wl,--no-warn-mismatch` override is gone, as is the pk dependency.
+  Note the toolchain ships no rv32e multilib, so `-print-libgcc-file-name`
+  silently resolves to the rv64 default; anything linking libgcc at this target
+  would be wrong. Avoid `/` and `%` in harness C code for that reason.
 
-- [ ] **#13 — `testfloat-stream` target is non-functional.**
-  It pipes `testfloat_gen` into the ELF, but `main_test.c` never reads stdin.
-  Correct TestFloat idiom is a three-stage pipe with the target as the filter:
+- [ ] **#13 — Berkeley TestFloat integration.**
+  The old non-functional `testfloat-stream` target has been removed. `make test`
+  now covers the same ground with host-generated vectors and no external
+  dependencies, so TestFloat is strictly a second tier for exhaustive runs.
+  Correct idiom is a three-stage pipe with the target as the filter:
   `testfloat_gen f32_add | <DUT> | testfloat_ver f32_add`.
   Four things will bite when building it:
-  1. **No `scanf`/`printf` in the target.** Under pk each stdio op is an HTIF trap;
-     it dominates runtime and drags ~10 KB of newlib into a 16 KB-budget library.
-     Hand-roll hex parse/emit over buffered `read()`/`write()`.
-  2. **Exception flags.** `testfloat_ver` expects a flags byte; this library has no
-     flag support. Run in a flags-ignoring mode or every case mismatches.
-  3. **Subnormals mass-fail by design** (library is FTZ). Filter them or real bugs
-     drown in expected failures.
-  4. **`-level 2` is not feasible** — ~10⁹ cases for a binary op, and a bit-serial
-     24×24 multiply is ~150–250 instructions. Use level 1 routinely.
+  1. **No `scanf`/`printf` in the target.** Hand-roll hex parse/emit over
+     buffered reads. Note the current harness links no libc at all, so adding a
+     stdin filter means implementing the I/O path from scratch.
+  2. **Exception flags.** `testfloat_ver` expects a flags byte; this library has
+     no flag support. Run in a flags-ignoring mode or every case mismatches.
+  3. **Subnormals mass-fail by design** (library is FTZ). Filter them or real
+     bugs drown in expected failures.
+  4. **`-level 2` is not feasible** — ~10⁹ cases for a binary op, and a
+     bit-serial 24×24 multiply is ~150–250 instructions. Level 1 routinely.
 
-- [ ] **#11 — Hardcoded personal path.**
-  `Makefile` defaults `PK` to `/Users/ben/src/riscv-pk/build/pk`. Default to
-  something discoverable on `PATH`, or fail with a clear message.
+- [x] **#11 — Hardcoded personal path.** The `PK` variable and its
+  `/Users/ben/src/riscv-pk/build/pk` default are gone; the harness no longer
+  uses a proxy kernel.
 
-- [ ] **#12 — Object-file namespace collision.**
-  Both `src/%.S` and `tests/%.c` map to `$(BUILD_DIR)/%.o`. A future
-  `tests/mul.c` would silently collide with `src/mul.S`. Split into
-  `$(BUILD_DIR)/src/` and `$(BUILD_DIR)/tests/`.
+- [x] **#12 — Object-file namespace collision.**
+  Library objects land in `build/` and harness objects in `build/tests/`, so
+  `src/foo.S` and `tests/foo.c` can no longer collide. The `wildcard tests/*.c`
+  glob is also gone, which matters now that `tests/` holds host-only code.
 
 ---
 

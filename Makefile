@@ -9,19 +9,22 @@ CC            := $(CROSS_COMPILE)gcc
 AR            := $(CROSS_COMPILE)ar
 SIZE          := $(CROSS_COMPILE)size
 
-# Target Architecture Flags (RV32EC with 16-register ABI)
-ARCH_FLAGS    := -march=rv32ec -mabi=ilp32e
+# Simulator configuration - XXX fix this
+SPIKE         ?= spike
+PK	      ?= $(if $(PK_PATH),$(PK_PATH),/Users/ben/src/riscv-pk/build/pk)
 
-# Optimization and Build Flags
-# -Os                     : Optimize aggressively for code size
-# -ffunction-sections     : Place each function in its own section (enables ld --gc-sections)
-# -fdata-sections         : Place each data item in its own section
-# -fno-builtin            : Prevent compiler from replacing calls with builtins
+# Assembly Library Flags (Strict RV32EC architecture & register enforcement)
+ARCH_FLAGS    := -march=rv32ec -mabi=ilp32
 CFLAGS        := $(ARCH_FLAGS) -Os -Wall -Wextra -ffunction-sections -fdata-sections -fno-builtin -Iinclude
+
+# Test Runner C Flags (Standard ilp32 multilib for toolchain compatibility)
+TEST_CFLAGS   := -march=rv32ic -mabi=ilp32 -Os -Wall -Wextra -Iinclude
+LDFLAGS       := -Wl,--no-warn-mismatch
 
 # Directories
 SRC_DIR       := src
 INC_DIR       := include
+TEST_DIR      := tests
 BUILD_DIR     := build
 LIB_DIR       := lib
 
@@ -32,6 +35,11 @@ TARGET_LIB    := $(LIB_DIR)/$(LIB_NAME)
 # Source and Object Files
 SRCS          := $(wildcard $(SRC_DIR)/*.S)
 OBJS          := $(patsubst $(SRC_DIR)/%.S, $(BUILD_DIR)/%.o, $(SRCS))
+
+# Test Sources and Executable
+TEST_SRCS     := $(wildcard $(TEST_DIR)/*.c)
+TEST_OBJS     := $(patsubst $(TEST_DIR)/%.c, $(BUILD_DIR)/%.o, $(TEST_SRCS))
+TEST_ELF      := $(BUILD_DIR)/test_runner.elf
 
 # Default Rule
 .PHONY: all
@@ -46,14 +54,38 @@ $(TARGET_LIB): $(OBJS) | $(LIB_DIR)
 	@echo "Library: $@"
 	@$(SIZE) -t $@
 
-# Compile assembly sources (.S -> .o)
+# Compile assembly sources (.S -> .o) strictly as RV32EC
 $(BUILD_DIR)/%.o: $(SRC_DIR)/%.S | $(BUILD_DIR)
 	@echo "  AS      $<"
 	@$(CC) $(CFLAGS) -c $< -o $@
 
+# Compile test C sources (.c -> .o) using standard rv32ic/ilp32
+$(BUILD_DIR)/%.o: $(TEST_DIR)/%.c | $(BUILD_DIR)
+	@echo "  CC      $<"
+	@$(CC) $(TEST_CFLAGS) -c $< -o $@
+
+# Link test runner executable with --no-warn-mismatch
+$(TEST_ELF): $(TEST_OBJS) $(TARGET_LIB)
+	@echo "  LINK    $@"
+	@$(CC) $(TEST_CFLAGS) $(LDFLAGS) $^ -o $@
+
 # Create required output directories
 $(BUILD_DIR) $(LIB_DIR):
 	@mkdir -p $@
+
+# Run tests in Spike using standard RV32IC architecture
+.PHONY: test
+test: $(TEST_ELF)
+	@echo "=== Running Spike Simulation ==="
+	$(SPIKE) --isa=rv32ic $(PK) $(TEST_ELF)
+
+# Stream host-generated TestFloat vectors into Spike stdin
+OP ?= f32_add
+FLAGS ?= -level 2
+.PHONY: testfloat-stream
+testfloat-stream: $(TEST_ELF)
+	@echo "=== Streaming TestFloat ($(OP)) into Spike ==="
+	testfloat_gen $(OP) $(FLAGS) | $(SPIKE) --isa=rv32ic $(PK) $(TEST_ELF)
 
 # Disassemble built library objects for inspection
 .PHONY: disasm

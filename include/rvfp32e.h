@@ -48,7 +48,6 @@ extern uint32_t __fixunssfsi(float a);
  * Integer Arithmetic Helper Routines (from rvint / mul.S)
  * -------------------------------------------------------------------------- */
 extern int32_t __mulsi3(int32_t a, int32_t b);
-extern int32_t nmul(int32_t a, int32_t b);
 
 #ifdef __cplusplus
 }

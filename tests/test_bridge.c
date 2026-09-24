@@ -1,7 +1,7 @@
-/* test_bridge.c - Bridge between TestFloat and rvfp32e assembly routines */
+/* test_bridge.c - Bridge between TestFloat and rvflt32e assembly routines */
 #include <stdint.h>
 
-/* Declarations of assembly functions in librvfp32e.a */
+/* Declarations of assembly functions in librvflt32e.a */
 extern float __addsf3(float a, float b);
 extern float __subsf3(float a, float b);
 extern float __mulsf3(float a, float b);

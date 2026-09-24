@@ -8,6 +8,8 @@
 *.test
 *.dump
 *.txt
+!LICENSE.txt
+!LICENSE-EXCEPTION.txt
 __pycache__/
 *.pyc
 *~

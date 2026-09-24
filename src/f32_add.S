@@ -3,14 +3,14 @@
 #
 # Author: Matteo Perotti, Benard Mesander
 #
-# This file is part of rvfp32e.
+# This file is part of rvflt32e.
 #
-# rvfp32e is free software: you can redistribute it and/or modify
+# rvflt32e is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
 # the Free Software Foundation, either version 3 of the License, or
 # (at your option) any later version.
 #
-# rvfp32e is distributed in the hope that it will be useful,
+# rvflt32e is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU General Public License for more details.

@@ -1,5 +1,5 @@
 # ==============================================================================
-# Makefile for rvfp32e (Compact RV32EC Single-Precision Soft-Float Library)
+# Makefile for rvflt32e (Compact RV32EC Single-Precision Soft-Float Library)
 # Target: CH32V003 and related RV32EC / ilp32e microcontrollers
 # ==============================================================================
 
@@ -14,11 +14,14 @@ SPIKE         ?= spike
 PK	      ?= $(if $(PK_PATH),$(PK_PATH),/Users/ben/src/riscv-pk/build/pk)
 
 # Assembly Library Flags (Strict RV32EC architecture & register enforcement)
-ARCH_FLAGS    := -march=rv32ec -mabi=ilp32
+# rv32e supports only the ilp32e ABI; gcc errors and clang ignores anything else.
+ARCH_FLAGS    := -march=rv32ec -mabi=ilp32e
 CFLAGS        := $(ARCH_FLAGS) -Os -Wall -Wextra -ffunction-sections -fdata-sections -fno-builtin -Iinclude
 
 # Test Runner C Flags (Standard ilp32 multilib for toolchain compatibility)
 TEST_CFLAGS   := -march=rv32ic -mabi=ilp32 -Os -Wall -Wextra -Iinclude
+# The library is RVE-tagged, the pk-hosted harness is not. Safe only because every
+# routine passes <=2 words in a0/a1, touches no stack, and uses only a0-a5/t0-t2.
 LDFLAGS       := -Wl,--no-warn-mismatch
 
 # Directories
@@ -29,7 +32,7 @@ BUILD_DIR     := build
 LIB_DIR       := lib
 
 # Target Library Name
-LIB_NAME      := librvfp32e.a
+LIB_NAME      := librvflt32e.a
 TARGET_LIB    := $(LIB_DIR)/$(LIB_NAME)
 
 # Source and Object Files
@@ -90,7 +93,7 @@ testfloat-stream: $(TEST_ELF)
 # Disassemble built library objects for inspection
 .PHONY: disasm
 disasm: $(TARGET_LIB)
-	$(CROSS_COMPILE)objdump -d $(TARGET_LIB) > $(BUILD_DIR)/librvfp32e.dis
+	$(CROSS_COMPILE)objdump -d $(TARGET_LIB) > $(BUILD_DIR)/librvflt32e.dis
 
 # Clean build artifacts
 .PHONY: clean

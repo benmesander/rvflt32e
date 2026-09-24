@@ -1,10 +1,10 @@
 /* ==========================================================================
- * rvfp32e.h - Lightweight Single-Precision Soft-Float Library for RV32EC
+ * rvflt32e.h - Lightweight Single-Precision Soft-Float Library for RV32EC
  * Target: CH32V003 and resource-constrained RISC-V targets (ilp32e)
  * ========================================================================== */
 
-#ifndef RVFP32E_H
-#define RVFP32E_H
+#ifndef RVFLT32E_H
+#define RVFLT32E_H
 
 #ifdef __c51__ /* C51 guard / placeholder */
 #elif defined(__cplusplus)
@@ -53,4 +53,4 @@ extern int32_t __mulsi3(int32_t a, int32_t b);
 }
 #endif
 
-#endif /* RVFP32E_H */
+#endif /* RVFLT32E_H */

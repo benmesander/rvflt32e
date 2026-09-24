@@ -28,9 +28,12 @@
  * Target: RV32EC / ilp32e (CH32V003)
  *
  * GCC libgcc interface conventions for single-precision floats:
- *   __eqsf2 / __nesf2 : returns 0 if equal, non-zero if not equal
- *   __ltsf2 / __lesf2 : returns < 0 if a < b (or a <= b), >= 0 otherwise
- *   __gtsf2 / __gesf2 : returns > 0 if a > b (or a >= b), <= 0 otherwise
+ *   __eqsf2 / __nesf2 : 0 if equal, non-zero if not equal or unordered
+ *   __ltsf2 / __lesf2 : < 0 if a < b (or a <= b), >= 0 otherwise, > 0 if unordered
+ *   __gtsf2 / __gesf2 : > 0 if a > b (or a >= b), <= 0 otherwise, < 0 if unordered
+ *   __unordsf2        : non-zero if either operand is NaN
+ *
+ * A value is NaN iff its magnitude (sign shifted out) exceeds 0xFF000000.
  */
 
     .text
@@ -46,21 +49,30 @@
 
 __eqsf2:
 __nesf2:
-    # Handle +0.0 vs -0.0 equivalence (0x00000000 == 0x80000000)
-    slli    a2, a0, 1           # Strip sign bit from a
-    slli    a3, a1, 1           # Strip sign bit from b
-    or      a2, a2, a3          # Combine both magnitude checks
-    beqz    a2, 1f              # If both are zero, return 0 (equal)
-
-    sub     a0, a0, a1          # Bitwise subtraction
-1:
+    lui     a4, 0xFF000
+    slli    a2, a0, 1           # magnitude of a
+    bltu    a4, a2, .Leq_unord
+    slli    a3, a1, 1           # magnitude of b
+    bltu    a4, a3, .Leq_unord
+    or      a5, a2, a3
+    beqz    a5, .Leq_zero       # +0 equals -0
+    sub     a0, a0, a1          # zero only for identical bit patterns
+    ret
+.Leq_zero:
+    li      a0, 0
+    ret
+.Leq_unord:
+    li      a0, 1
     ret
     .size __eqsf2, . - __eqsf2
     .size __nesf2, . - __nesf2
 
 
 /* -------------------------------------------------------------------
- * Less Than / Less Than or Equal (__ltsf2, __lesf2)
+ * Ordered comparisons (__ltsf2, __lesf2, __gtsf2, __gesf2)
+ *
+ * For ordered operands all four return the same three-way result, so they
+ * share one core and differ only in the value produced for NaN.
  * ------------------------------------------------------------------- */
     .section .text.__ltsf2, "ax", @progbits
     .globl __ltsf2
@@ -70,40 +82,14 @@ __nesf2:
 
 __ltsf2:
 __lesf2:
-    # Handle zero sign checks (+0.0 == -0.0)
-    slli    a2, a0, 1
-    slli    a3, a1, 1
-    or      a2, a2, a3
-    beqz    a2, 2f              # Both zero -> return 0
-
-    # Compare signs
-    srli    a2, a0, 31          # a sign bit
-    srli    a3, a1, 31          # b sign bit
-    bne     a2, a3, 1f          # If signs differ, negative operand is smaller
-
-    # Signs are equal: check magnitude
-    # If both negative (a2 == 1), reverse comparison order
-    sub     a0, a0, a1
-    beqz    a2, 3f
-    neg     a0, a0              # Invert comparison for negative numbers
-3:
-    ret
-
-1:
-    # Signs differ: return -1 if a is negative (a2 == 1), else +1
-    li      a0, 1
-    beqz    a2, 3b
-2:
-    li      a0, -1
-    ret
+    li      t0, 1               # unordered must make "a < b" false
+    j       .Lcmp
     .size __ltsf2, . - __ltsf2
     .size __lesf2, . - __lesf2
 
 
-/* -------------------------------------------------------------------
- * Greater Than / Greater Than or Equal (__gtsf2, __gesf2)
- * ------------------------------------------------------------------- */
-    .section .text.__gtsf2, "ax", @progbits
+/* Greater Than / Greater Than or Equal share the core below; they cannot be
+ * an argument swap of __ltsf2 because the NaN result has the opposite sign. */
     .globl __gtsf2
     .globl __gesf2
     .type __gtsf2, @function
@@ -111,13 +97,60 @@ __lesf2:
 
 __gtsf2:
 __gesf2:
-    # Greater Than is simply the inverted result of Less Than (__ltsf2)
-    # Swap arguments (a0 <-> a1) and branch into less-than comparison logic
-    mv      a2, a0
-    mv      a0, a1
-    mv      a1, a2
-    j       __ltsf2
+    li      t0, -1              # unordered must make "a > b" false
 
+.Lcmp:
+    lui     a4, 0xFF000
+    slli    a2, a0, 1           # magnitude of a
+    bltu    a4, a2, .Lcmp_unord
+    slli    a3, a1, 1           # magnitude of b
+    bltu    a4, a3, .Lcmp_unord
+    or      a5, a2, a3
+    beqz    a5, .Lcmp_eq        # +0 equals -0
+    srli    a4, a0, 31          # sign of a
+    srli    a5, a1, 31          # sign of b
+    bne     a4, a5, .Lcmp_signs
+    li      a0, -1
+    bltu    a2, a3, .Lcmp_adj
+    li      a0, 1
+    bltu    a3, a2, .Lcmp_adj
+.Lcmp_eq:
+    li      a0, 0
+    ret
+.Lcmp_adj:
+    beqz    a4, 1f              # both negative reverses the magnitude order
+    neg     a0, a0
+1:
+    ret
+.Lcmp_signs:
+    li      a0, 1               # a positive, b negative
+    beqz    a4, 1f
+    li      a0, -1              # a negative, b positive
+1:
+    ret
+.Lcmp_unord:
+    mv      a0, t0
+    ret
     .size __gtsf2, . - __gtsf2
     .size __gesf2, . - __gesf2
+
+
+/* -------------------------------------------------------------------
+ * Unordered predicate (__unordsf2)
+ * ------------------------------------------------------------------- */
+    .section .text.__unordsf2, "ax", @progbits
+    .globl __unordsf2
+    .type __unordsf2, @function
+
+__unordsf2:
+    lui     a4, 0xFF000
+    slli    a2, a0, 1
+    slli    a3, a1, 1
+    li      a0, 1
+    bltu    a4, a2, 1f
+    bltu    a4, a3, 1f
+    li      a0, 0
+1:
+    ret
+    .size __unordsf2, . - __unordsf2
 	

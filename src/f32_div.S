@@ -100,6 +100,20 @@ exit:
 und_ov_flow:
   # Overflow?
   bgtz a2, ovf         # If here, a2 is either in ovf (> 0) or in underflow (<= 0)
+  # Underflow. At a final exponent of 0 the true value is q * 2^-150, so the
+  # result is RNE(q/2); that reaches the minimum normal only for q == 0xFFFFFF,
+  # where the halfway case rounds to even. Everything else flushes to zero.
+  li t2, -1
+  bne a2, t2, .Lzero_signed
+  not t2, a0
+  slli t2, t2, 8       # zero only when all 24 quotient bits are set
+  bnez t2, .Lzero_signed
+  srli a0, a0, 31
+  slli a0, a0, 31
+  lui t2, 0x00800
+  or a0, a0, t2        # signed minimum normal
+  ret
+.Lzero_signed:
   srli a0, a0, 31
   slli a0, a0, 31
   # Return signed 0
@@ -111,7 +125,7 @@ zero_denormal:
 # X == 0
   beqz a3, nan         # Return NaN if 0/0
 # Result is 0, but determine sign anyway.
-zero:
+.Lzero:
   xor a0, a0, a1       # Determine the correct sign of the multiplication
 # t0 = 0x80000
   and a0, a0, t0       # Append Zero
@@ -128,7 +142,7 @@ inf_nan:
 # Check for Inf
   beq a2, a3, nan      # They are both Inf -> return NaN
 # There is only one Inf.
-  beq a3, a5, zero     # Y is an inf, return zero
+  beq a3, a5, .Lzero   # Y is an inf, return zero
 # X is inf, Y is a number. Result is INF, but we need to determine its sign.
 inf:
   xor a0, a0, a1       # Put the correct sign into a0

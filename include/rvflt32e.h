@@ -28,6 +28,10 @@ extern float __divsf3(float a, float b);
  *   - __eqsf2 / __nesf2: returns 0 if equal, non-zero otherwise
  *   - __ltsf2 / __lesf2: returns negative if a < (or <=) b, 0 or positive otherwise
  *   - __gtsf2 / __gesf2: returns positive if a > (or >=) b, 0 or negative otherwise
+ *   - __unordsf2: returns non-zero if either operand is NaN
+ * If either operand is NaN, __eqsf2 / __nesf2 return non-zero, __ltsf2 / __lesf2
+ * return positive, and __gtsf2 / __gesf2 return negative, so that every ordered
+ * predicate evaluates false.
  * -------------------------------------------------------------------------- */
 extern int __eqsf2(float a, float b);
 extern int __nesf2(float a, float b);
@@ -35,6 +39,7 @@ extern int __ltsf2(float a, float b);
 extern int __lesf2(float a, float b);
 extern int __gtsf2(float a, float b);
 extern int __gesf2(float a, float b);
+extern int __unordsf2(float a, float b);
 
 /* --------------------------------------------------------------------------
  * Type Conversion Routines

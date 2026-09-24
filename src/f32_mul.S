@@ -73,16 +73,19 @@ mul_loop:
   slli t1, t1, 1
   srli t2, a3, 23          # Extract MSB of a3
   or t1, t1, t2            # Bring into LSB of t1
-  slli a3, a3, 1           # Shift remainder left
+  slli a3, a3, 9           # Drop the bit just merged into t1, keeping 24 bits
+  srli a3, a3, 8
   j 2f
 1:
   # Product in [2.0, 4.0): increment exponent
   addi a2, a2, 1
 2:
 
-  # Check for exponent underflow or overflow
-  addi a5, x0, 254
+  # Check for exponent underflow or overflow. a2 is the final biased exponent,
+  # so 254 is still finite; a negative a2 wraps and is caught by the unsigned test.
+  addi a5, x0, 255
   bgeu a2, a5, und_ov_flow
+  beqz a2, tiny            # exponent 0 cannot be encoded as a normal
 
   # Assemble unrounded result in a0
   xor t1, t1, t0           # Clear implicit 1 (bit 23) from t1
@@ -96,6 +99,17 @@ mul_loop:
   bne a3, t0, exit         # If remainder > 0.5, keep round up
   andi a0, a0, -2          # Tie case (remainder == 0.5): round to even LSB
 exit:
+  ret
+
+tiny:
+  # The true value is s * 2^-150, so the result is RNE(s/2). That reaches the
+  # minimum normal only for s == 0xFFFFFF, where the halfway case rounds to
+  # even; every other subnormal result is flushed to zero.
+  not a5, t1
+  slli a5, a5, 8           # zero only when all 24 significand bits are set
+  bnez a5, zero_denormal
+  lui a5, 0x00800
+  or a0, a4, a5            # signed minimum normal
   ret
 
 und_ov_flow:

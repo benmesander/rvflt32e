@@ -28,10 +28,14 @@
  * Target: RV32EC / ilp32e (CH32V003)
  *
  * GCC libgcc interface conventions for single-precision conversions:
- *   __floatsisf   : signed 32-bit int -> float (a0 -> a0)
- *   __floatunsisf : unsigned 32-bit int -> float (a0 -> a0)
+ *   __floatsisf   : signed 32-bit int -> float (a0 -> a0), round-to-nearest-even
+ *   __floatunsisf : unsigned 32-bit int -> float (a0 -> a0), round-to-nearest-even
  *   __fixsfsi     : float -> signed 32-bit int (a0 -> a0, truncates toward zero)
- *   __fixunssfsi   : float -> unsigned 32-bit int (a0 -> a0, truncates toward zero)
+ *   __fixunssfsi  : float -> unsigned 32-bit int (a0 -> a0, truncates toward zero)
+ *
+ * Out-of-range and NaN float->int conversions follow RISC-V fcvt semantics:
+ * NaN and positive overflow give INT_MAX / UINT_MAX, negative overflow gives
+ * INT_MIN, and any negative input to __fixunssfsi gives 0.
  */
 
     .text
@@ -83,15 +87,24 @@ __floatunsisf:
     j       .Lnorm_loop
 
 .Lpack_float:
-    # Mantissa setup: strip explicit MSB (bit 31), align 23-bit fraction
-    slli    a0, a0, 1           # Drop implicit leading 1
-    srli    a0, a0, 9           # Shift 23-bit mantissa into position [22:0]
-
-    # Combine exponent [30:23] and mantissa [22:0]
+    # a0 is normalized with bit 31 set; a2 is the biased exponent.
+    andi    a3, a0, 0xFF        # guard + sticky bits
+    srli    a0, a0, 8           # [23:0], bit 23 = implicit 1
+    addi    a2, a2, -1          # implicit 1 carries back into the exponent
     slli    a2, a2, 23
-    or      a0, a0, a2
+    add     a0, a0, a2
 
-    # Apply sign bit [31]
+    # Round to nearest, ties to even. A carry out of the fraction propagates
+    # into the exponent, which is exactly what we want.
+    li      a4, 0x80
+    bltu    a3, a4, .Lapply_isign
+    bne     a3, a4, .Lround_up
+    andi    a4, a0, 1           # exact tie: round up only if odd
+    beqz    a4, .Lapply_isign
+.Lround_up:
+    addi    a0, a0, 1
+
+.Lapply_isign:
     or      a0, a0, a1
 1:
     ret
@@ -103,52 +116,87 @@ __floatunsisf:
  * ------------------------------------------------------------------- */
     .section .text.__fixsfsi, "ax", @progbits
     .globl __fixsfsi
-    .globl __fixunssfsi
     .type __fixsfsi, @function
-    .type __fixunssfsi, @function
 
 __fixsfsi:
-__fixunssfsi:
-    # Extract sign, exponent, and mantissa
-    srli    a1, a0, 31          # a1 = sign bit
-    slli    a2, a0, 1
-    srli    a2, a2, 24          # a2 = unbiased exponent [30:23]
+    slli    a2, a0, 1           # magnitude
+    lui     a3, 0xFF000
+    bltu    a3, a2, .Lfix_max   # NaN
+    srli    a1, a0, 31          # sign
+    srli    a2, a2, 24
+    addi    a2, a2, -127        # unbiased exponent
+    bltz    a2, .Lfix_zero      # |x| < 1.0
+    li      a3, 31
+    bgtu    a2, a3, .Lfix_sat   # |x| >= 2^32, or Inf
 
-    # Calculate biased exponent (exp - 127)
-    addi    a2, a2, -127
-    bltz    a2, .Lunderflow     # Exp < 0 -> absolute value < 1.0 -> return 0
-
-    # Extract 23-bit fraction and restore explicit leading 1
     slli    a0, a0, 9
     srli    a0, a0, 9
-    li      a3, 1
-    slli    a3, a3, 23
-    or      a0, a0, a3          # a0 = 24-bit mantissa (1.fraction)
-
-    # Shift mantissa according to exponent value
-    li      a3, 23
-    sub     a2, a2, a3
-    bltz    a2, .Lshift_right
-
-    # Exponent >= 23: shift left
-    sll     a0, a0, a2
-    j       .Lapply_sign
-
-.Lshift_right:
-    # Exponent < 23: shift right
+    lui     a3, 0x00800
+    or      a0, a0, a3          # 24-bit significand, bit 23 = implicit 1
+    addi    a2, a2, -23
+    bltz    a2, .Lfix_shr
+    sll     a0, a0, a2          # exponent <= 31 keeps this inside 32 bits
+    j       .Lfix_sign
+.Lfix_shr:
     neg     a2, a2
     srl     a0, a0, a2
 
-.Lapply_sign:
-    # Negate integer if float sign bit was set
-    beqz    a1, 1f
-    neg     a0, a0
-1:
+.Lfix_sign:
+    lui     a3, 0x80000
+    beqz    a1, .Lfix_pos
+    bltu    a3, a0, .Lfix_min   # magnitude beyond 2^31
+    neg     a0, a0              # -2^31 negates to itself, which is correct
+    ret
+.Lfix_pos:
+    bgeu    a0, a3, .Lfix_max
     ret
 
-.Lunderflow:
+.Lfix_zero:
     li      a0, 0
     ret
-
+.Lfix_sat:
+    bnez    a1, .Lfix_min
+.Lfix_max:
+    lui     a0, 0x80000
+    addi    a0, a0, -1          # INT_MAX
+    ret
+.Lfix_min:
+    lui     a0, 0x80000         # INT_MIN
+    ret
     .size __fixsfsi, . - __fixsfsi
+
+    .section .text.__fixunssfsi, "ax", @progbits
+    .globl __fixunssfsi
+    .type __fixunssfsi, @function
+
+__fixunssfsi:
+    slli    a2, a0, 1           # magnitude
+    lui     a3, 0xFF000
+    bltu    a3, a2, .Lfixu_max  # NaN
+    bltz    a0, .Lfixu_zero     # any negative input, including -0.0
+    srli    a2, a2, 24
+    addi    a2, a2, -127        # unbiased exponent
+    bltz    a2, .Lfixu_zero     # x < 1.0
+    li      a3, 31
+    bgtu    a2, a3, .Lfixu_max  # x >= 2^32, or +Inf
+
+    slli    a0, a0, 9
+    srli    a0, a0, 9
+    lui     a3, 0x00800
+    or      a0, a0, a3          # 24-bit significand, bit 23 = implicit 1
+    addi    a2, a2, -23
+    bltz    a2, .Lfixu_shr
+    sll     a0, a0, a2
+    ret
+.Lfixu_shr:
+    neg     a2, a2
+    srl     a0, a0, a2
+    ret
+
+.Lfixu_zero:
+    li      a0, 0
+    ret
+.Lfixu_max:
+    li      a0, -1              # UINT_MAX
+    ret
     .size __fixunssfsi, . - __fixunssfsi

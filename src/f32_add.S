@@ -153,7 +153,7 @@ zero_mantissa:
 # a2 and a3 are not ordered wrt a0 and a1, but this is not important since the numbers are the same
 equal:
   beq a0, a1, equal_samesign                        # are the signs equal too?
-zero:
+.Lzero:
   mv  a0, zero                                      # if not, the result is zero
   ret                                               # return if the result was zero
 # a5 = 0xFF

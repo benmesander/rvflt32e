@@ -2,69 +2,85 @@
 
 Items from the 2026-09-24 code review. Numbering matches the original review.
 
-Already resolved: #10 (partial — `-mabi=ilp32e`), #21 (stray `f32_conv.S~`), #22 (naming).
+Already resolved: #1–#9 and #23–#24 (all P0 correctness), #10 (partial —
+`-mabi=ilp32e`), #21 (stray `f32_conv.S~`), #22 (naming).
+
+Verified under spike against 249,859 host-generated IEEE-754 reference checks:
+**0 failures**. The same suite reports 58,029 failures on the pre-fix sources.
+Strict `-march=rv32ec -mabi=ilp32e` build is 1182 bytes of `.text`.
 
 ---
 
 ## P0 — Wrong results
 
-These produce incorrect floating-point values or violate the libgcc ABI contract.
-All are reachable with a handful of hand-picked vectors.
+- [x] **#1 — `__ltsf2` returned `-1` instead of `0` for the ±0 case.**
+  Branch target `2f` landed on `li a0, -1`. Now routed to a zeroing path.
 
-- [ ] **#1 — `__ltsf2` returns `-1` instead of `0` for the ±0 case.**
-  `src/f32_cmp.S`: `beqz a2, 2f` targets the `2:` label, which is `li a0, -1; ret`.
-  Result: `__ltsf2(0.0f, -0.0f)` reports `0.0 < -0.0`, and every `0.0 < 0.0`
-  comparison in user code evaluates true. Needs a branch target that zeroes `a0`.
+- [x] **#2 — No NaN handling in `f32_cmp.S`.**
+  All entry points now test for NaN (magnitude > `0xFF000000`) first.
+  `__eqsf2`/`__nesf2` return 1, `__ltsf2`/`__lesf2` return 1, and
+  `__gtsf2`/`__gesf2` return -1, so every ordered predicate evaluates false.
 
-- [ ] **#2 — No NaN handling anywhere in `f32_cmp.S`.**
-  All six entry points ignore NaN. Required libgcc behaviour:
-  - `__eqsf2`/`__nesf2` must return **non-zero** if either operand is NaN.
-    Currently `sub a0, a0, a1` on two identical NaN patterns returns `0`,
-    so `NaN == NaN` is true.
-  - `__ltsf2`/`__lesf2` must return a **positive** value when unordered.
-  - `__gtsf2`/`__gesf2` must return a **negative** value when unordered.
+- [x] **#3 — `__gtsf2` was an argument-swap of `__ltsf2`.**
+  For ordered operands all four routines return the same three-way result, so
+  they now share one core and differ only in the NaN constant loaded into `t0`.
 
-- [ ] **#3 — `__gtsf2` cannot be an argument-swap of `__ltsf2`.**
-  The swap is correct for ordered operands but has inverted polarity for
-  unordered ones (`lt` needs positive for NaN, `gt` needs negative). Once NaN
-  handling lands, `__gtsf2`/`__gesf2` need their own NaN branch or a carefully
-  signed negation of a shared ordered-compare core.
+- [x] **#4 — `__unordsf2` was missing.**
+  Implemented and declared in `include/rvflt32e.h`. Note this was previously
+  being satisfied silently by `libgcc` at link time.
 
-- [ ] **#4 — `__unordsf2` is missing entirely.**
-  GCC emits it for `isunordered()` and for `<`/`>` on possibly-NaN operands.
-  Neither implemented nor declared in `include/rvflt32e.h`. Link failures will
-  only surface in downstream firmware, not here.
+- [x] **#5 — `__fixunssfsi` was aliased to `__fixsfsi`.** Now separate; negative
+  inputs (including `-0.0`) return 0.
 
-- [ ] **#5 — `__fixunssfsi` is aliased to `__fixsfsi`.**
-  The shared body applies the sign via `neg`. For negative input `__fixunssfsi`
-  must return `0`; it currently returns a wrapped value. Needs to be split.
+- [x] **#6 — `__fixsfsi` had no clamping or NaN/Inf handling.**
+  Now saturates to `INT_MAX`/`INT_MIN` (`UINT_MAX`/0 for the unsigned form)
+  following RISC-V `fcvt` semantics, including NaN → `INT_MAX`/`UINT_MAX`.
 
-- [ ] **#6 — `__fixsfsi` has no range clamping and no NaN/Inf handling.**
-  `sll a0, a0, a2` uses only the low 5 bits of the shift amount on RV32, so any
-  input with |x| ≥ 2³¹ silently wraps instead of saturating to `INT_MAX`/`INT_MIN`.
-  Inf and NaN take the same path. Downstream code often uses the result as an
-  index or length, so this is a robustness concern too.
+- [x] **#7 — `__floatsisf`/`__floatunsisf` truncated instead of rounding.**
+  Now round-to-nearest-even, with the rounding carry propagating naturally into
+  the exponent. `(float)0x7FFFFFFF` gives `0x4F000000`; `(float)16777219` gives
+  `16777220`.
 
-- [ ] **#7 — `__floatsisf` / `__floatunsisf` truncate instead of rounding.**
-  `slli a0,a0,1; srli a0,a0,9` drops the low bits with no round-to-nearest-even.
-  `(float)0x7FFFFFFF` yields `0x4EFFFFFF` instead of `0x4F000000`;
-  `(float)16777219` yields `16777218` instead of `16777220`.
-  RNE is a stated goal, so this is a spec violation, not a documented limitation.
+- [x] **#8 — `__mulsf3` overflow threshold was off by one.**
+  Compared against 254 when `a2` is the final biased exponent, flushing finite
+  products in 1.7e38…3.4e38 to `Inf`. Now 255. The old `a2 == 0` case also fell
+  through and emitted a subnormal encoding, which the FTZ policy forbids; that
+  binade is now handled explicitly (see #23).
 
-- [ ] **#8 — `__mulsf3` overflow threshold is off by one.**
-  `src/f32_mul.S`: `addi a5,x0,254; bgeu a2,a5,und_ov_flow`. Unlike `f32_add.S`
-  and `f32_div.S`, `a2` here is the **final** biased exponent (it is `slli`'d by 23
-  and added directly). Biased exponent 254 is the largest *finite* exponent —
-  `FLT_MAX` is `0x7F7FFFFF`. Every product landing in roughly 1.7e38…3.4e38 is
-  wrongly flushed to `Inf`. Compare against 255.
+- [x] **#9 — `__mulsf3` leaked a stale bit into the rounding decision.**
+  `slli a3, a3, 1` reintroduced at bit 24 the bit already merged into the
+  significand, forcing round-up and breaking tie detection. Now masked with
+  `slli a3, a3, 9; srli a3, a3, 8`.
 
-- [ ] **#9 — `__mulsf3` leaks a stale bit into the rounding decision.**
-  After the normalising left shift, bit 23 of `a3` has already been consumed into
-  the significand but reappears at position 24, because `slli a3,a3,1` is not
-  masked. The subsequent `bltu a3,t0` then always decides "round up" and the tie
-  check `bne a3,t0` never matches. A remainder of exactly `0x800000` pre-shift has
-  a true remainder of 0 post-shift and must not round up, but does.
-  Fix: `slli a3,a3,9; srli a3,a3,8` before the rounding compare.
+---
+
+## P0 — New findings
+
+- [x] **#23 — `__divsf3` (and `__mulsf3`) flushed a result that rounds up to the
+  minimum normal.**
+  ```
+  0x3FFFFFFF / 0x7F000000  ->  was 0x00000000, expected 0x00800000
+  0x00800000 * 0x3F7FFFFF  ->  was 0x00000000, expected 0x00800000
+  ```
+  The first diagnosis of this was wrong. It is *not* an ordering problem between
+  the underflow test and the rounding step: for the div case the division is
+  exact (quotient `0xFFFFFF`, remainder 0), so there is no rounding remainder to
+  carry. The tie comes from the precision bit lost when the result is subnormal.
+
+  At a final exponent of 0 the true value is `s * 2^-150` for a 24-bit
+  significand `s`, so the correctly rounded result is `RNE(s / 2)`. That reaches
+  the minimum normal only when `s == 0xFFFFFF`, where the halfway case rounds to
+  even; every other value in that binade is subnormal and is flushed under the
+  FTZ policy. Both routines now test exactly that condition, which costs three
+  instructions plus a small tail and needs no general gradual-underflow support.
+
+  Verified load-bearing: disabling just these two handlers reproduces 18
+  failures (12 mul, 6 div) out of the same 249,859 checks.
+
+- [x] **#24 — `f32_div.S` did not assemble.** The label `zero:` shadows the `zero`
+  register alias for `x0`, so `beq a3, a5, zero` was parsed as a register operand.
+  Renamed to `.Lzero` in `f32_div.S`, and the same latent shadow removed from
+  `f32_add.S`. This is #15 manifesting as a hard build failure.
 
 ---
 
@@ -77,8 +93,10 @@ and it needs no external tooling.
   `tests/main_test.c` runs 4 add vectors. `test_f32_sub`, `test_f32_mul`,
   `test_f32_div`, `test_f32_eq`, `test_f32_lt` in `tests/test_bridge.c` are never
   called, and there is no bridge at all for the conversion routines.
-  Build a tier-1 table covering all routines plus edge cases: ±0, ±Inf, NaN,
-  `FLT_MAX`, subnormal inputs, `INT_MIN`, 2³¹, and exponent-254 products.
+  A working bare-metal spike harness already exists in `/tmp/rvtest` (host-side
+  reference generator, HTIF console, linker script, `_start`) and is what proved
+  #1–#9. It needs no pk and no newlib. Landing it in `tests/` is the single
+  highest-value remaining task.
 
 - [ ] **#10 (remainder) — Decide the simulation strategy.**
   `-mabi=ilp32e` is now correct and the library objects are properly RVE-tagged
@@ -91,7 +109,12 @@ and it needs no external tooling.
     `getchar`/`putchar`, and a linker script at `0x80000000`. Lets you build
     everything `rv32ec/ilp32e` and drop `--no-warn-mismatch`. Critically, it
     avoids needing an rv32e newlib multilib, which the stock toolchains do not ship.
+    Confirmed: `riscv64-unknown-elf-gcc -print-multi-lib` on the installed
+    Homebrew toolchain offers only rv32i/rv32im/rv32iac/rv32imac with ilp32.
+    Note spike's HTIF console does not acknowledge via `fromhost`; poll `tohost`
+    for drain instead, or output hangs after the first character.
   - **Option B: keep pk**, keep the justified `--no-warn-mismatch`. Least effort.
+    Note `riscv-pk` is not currently installed.
 
 - [ ] **#13 — `testfloat-stream` target is non-functional.**
   It pipes `testfloat_gen` into the ELF, but `main_test.c` never reads stdin.

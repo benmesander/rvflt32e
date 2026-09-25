@@ -216,7 +216,6 @@ Increase the randomised coverage for a longer soak:
 ```sh
 make test VEC_RANDOM=500000
 ```
-## Attributions
 
 ## Attributions & Philosophy
 

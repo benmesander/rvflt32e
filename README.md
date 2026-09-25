@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo.jpg" alt="rvflt32e logo" width="300" />
+</p>
+
 # rvflt32e
 
 A compact, high-performance soft floating-point single-precision library written in hand-optimized RISC-V assembly for RV32E targets (such as the WCH CH32V003).

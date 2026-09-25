@@ -15,6 +15,14 @@ To keep the binary footprint minimal and execution fast:
 4. **Rounding Mode:** Round to Nearest, Ties to Even (RNE) is the only supported mode.
 5. **Zero Stack Allocation:** Operations execute strictly in registers without stack pushing or popping.
 
+**At a glance:** the whole library is about **1.2 KB** of `.text`. Swapped in for
+`libgcc`'s soft-float routines in the benchmark demo, it cuts that program from
+7.1 KB down to 1.7 KB of flash — a **~76% reduction**. The multiply and divide
+routines see the largest per-operation wins: `__mulsf3` runs in 253 cycles
+against `libgcc`'s 418 (**~1.65x faster**), and `__divsf3` in 191 cycles against
+865 (**~4.5x faster**). See [Benchmarking & Demo](#benchmarking--demo) for the
+full comparison and how to reproduce it.
+
 ---
 
 ## Typical Use Cases

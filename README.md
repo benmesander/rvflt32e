@@ -4,12 +4,11 @@ Soft floating point single precision implementation for RV32E processors such as
 This libary offers GCC and Clang-compatible single-precision IEEE754 floating point support for highly constrained RISC-V processors such as the ch32v003 (48Mhz, 2K RAM, 16K ROM, 16 registers, no multiplier, etc.). 
 
 In order to make this code feasible, the implementation is minimal. In particular:
-1. Single precision only.
-1. No support for subnormal numbers.
-2. No support for signalling NaN.
-3. Only rounding mode supported is RNE.
-
-The code is tested with the Berkely Softfloat package. (todo: links, description)
+1. **Single precision only (`float`).**
+2. **Flush-to-zero (FTZ):** Subnormal inputs and results are flushed to zero.
+3. **No signaling NaN support:** Quiet NaNs are maintained.
+4. **Rounding Mode:** Round to Nearest, Ties to Even (RNE) is the only supported mode.
+5. **Zero Stack Allocation:** Operations execute strictly in registers without stack pushing or popping.
 
 ## Linking only what you use
 
@@ -43,6 +42,74 @@ Some routines unavoidably pull in a neighbour because they share code:
 - `__ltsf2`, `__lesf2`, `__gtsf2` and `__gesf2` share one comparison core.
 - `__eqsf2`/`__nesf2` and `__unordsf2` are independent of the above.
 
+## Benchmarking & Demo
+
+A standalone benchmark suite is located in the `demo/` directory. It compares `librvflt32e` directly against standard libgcc soft-float routines on an RV32EC target, measuring both binary size footprint and execution cycle counts per operation.
+
+### Prerequisites
+1. **RISC-V Toolchain with `ilp32e` Multilib Support:**
+A toolchain supporting rv32e/ilp32e (such as riscv-none-elf-gcc from xPack) is required to build against standard libgcc.
+1. **Spike Simulator:**
+Install the RISC-V ISA simulator (`spike`) to execute cycle count benchmarks over HTIF.
+
+### Building and Running
+
+```sh
+cd demo
+
+# Measure code size delta
+make compare
+
+# Run cycle count benchmarks on Spike
+make run-spike
+```
+
+### Typical Results
+**Target Architecture:** `rv32e_c_zicsr` | **ABI:** `ilp32e` | **Optimization:** `-Os`
+
+### Code Size Footprint
+
+librvflt32e achieves a **~76% reduction in code size** compared to standard `libgcc`, saving over 5.5 KB of flash—critical for resource-constrained microcontrollers like the CH32V003 (16 KB Flash).
+
+```Plaintext
+============================================================
+ Code Size Comparison (Standard libgcc vs. rvflt32e)
+============================================================
+   text	   data	    bss	    dec	    hex	filename
+   7256	     84	      0	   7340	   1cac	demo_standard.elf
+   1707	     84	      0	   1791	    6ff	demo_rvflt32e.elf
+```
+
+### Cycle Count Benchmarks (mcycle on Spike)
+Through bit-serial shift-and-subtract/add loops optimized specifically for 16-register RISC-V cores, floating-point division is **~4.5x faster** (191 vs. 865 cycles) and multiplication is **~1.65x faster** (253 vs. 418 cycles) compared to standard `libgcc`:
+
+```Plaintext
+>>> RUNNING STANDARD LIBGCC ON SPIKE <<<
+====================================
+  Floating-Point Cycle Benchmark    
+====================================
+  Add (+): 63 cycles/op
+  Sub (-): 87 cycles/op
+  Mul (*): 418 cycles/op
+  Div (/): 865 cycles/op
+  Int->Float: 137 cycles/op
+  Float->Int: 82 cycles/op
+====================================
+
+>>> RUNNING RVFLT32E ON SPIKE <<<
+====================================
+  Floating-Point Cycle Benchmark    
+====================================
+  Add (+): 60 cycles/op
+  Sub (-): 61 cycles/op
+  Mul (*): 253 cycles/op
+  Div (/): 191 cycles/op
+  Int->Float: 189 cycles/op
+  Float->Int: 153 cycles/op
+====================================
+```
+
+
 ## Testing
 
 ```sh
@@ -63,6 +130,7 @@ Increase the randomised coverage for a longer soak:
 ```sh
 make test VEC_RANDOM=500000
 ```
+## Attributions
 
 The core algorithms are based upon the excellent [RVfplib](https://github.com/pulp-platform/RVfplib) . I was going to write my own, but this code was so good I decided to fork it and keep it alive as it has been archived. I also snagged some algorithms from my [rvint](https://github.com/benmesander/rvint) integer math library and modified them to be optimal for this application.
 

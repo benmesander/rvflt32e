@@ -17,6 +17,18 @@ To keep the binary footprint minimal and execution fast:
 
 ---
 
+## Typical Use Cases
+
+While floating point is historically avoided on ultra-small microcontrollers due to binary size bloat, `rvflt32e`'s ~1.2 KB total footprint enables single-precision math for:
+
+* **Sensor Processing:** NTC thermistor Steinhart-Hart calculations, polynomial ADC unit conversion, and non-linear calibration.
+* **Control Loops:** Motor drive and thermal PID control loops without fixed-point scaling or overflow management.
+* **Signal Filtering:** IIR/FIR low-pass filters, exponential gamma correction curves, and RMS calculations.
+* **Edge Analytics:** Feature scaling and sensor data normalization for lightweight edge inference.
+* **Joy:** Maybe you just want to port a game that uses fp or write a calculator program or draw pretty graphs.
+
+---
+
 ## Integration into Your C Program
 
 Because `rvflt32e` implements the standard RISC-V GCC soft-float ABI routines (`__addsf3`, `__mulsf3`, `__divsf3`, etc.), **no special header files or custom API function calls are required**. 

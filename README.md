@@ -37,6 +37,7 @@ Standard C library `printf("%f", val)` implementation should **never** be used o
 
 **Recommended Alternatives:**
 * Print floating-point values by splitting them into integer and fractional parts using integer division/modulo.
+* I may implement nano floating point input/output routines if there is demand.
 * Always append `f` to floating-point constants in C (e.g., `12.34f`).
 
 ### 3. C Code Example

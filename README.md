@@ -128,6 +128,67 @@ Some routines unavoidably pull in a neighbour because they share code:
 - `__ltsf2`, `__lesf2`, `__gtsf2` and `__gesf2` share one comparison core.
 - `__eqsf2`/`__nesf2` and `__unordsf2` are independent of the above.
 
+## Building on macOS
+
+### Toolchain
+
+The library itself only needs an assembler, so either toolchain below works for
+`make all`. The `riscv-tools` tap additionally provides the simulator needed for
+`make test`.
+
+```sh
+brew tap riscv-software-src/riscv
+brew trust riscv-software-src/riscv      # required for third-party taps
+brew install riscv-tools                 # riscv-gnu-toolchain + spike + pk
+```
+
+`riscv-tools` is a meta-formula pulling in:
+
+| Formula | Provides |
+| --- | --- |
+| `riscv-gnu-toolchain` | `riscv64-unknown-elf-{gcc,as,ld,ar,objdump,size}` |
+| `riscv-isa-sim` | `spike`, the reference ISA simulator |
+| `riscv-pk` | `pk`, a proxy kernel (not used by this project) |
+
+Precompiled bottles exist only up to macOS Sequoia (15). On anything newer this
+builds from source and needs roughly 6.5 GB of scratch space.
+
+Only `riscv-gnu-toolchain` and `riscv-isa-sim` are actually required. The test
+harness is freestanding and drives spike over HTIF directly, so `riscv-pk` is
+not needed.
+
+If you only want to build the library and not run the tests, the smaller
+homebrew-core formulae are enough:
+
+```sh
+brew install riscv64-elf-gcc             # pulls in riscv64-elf-binutils
+```
+
+Note the different tool prefix — build with
+`make CROSS_COMPILE=riscv64-elf-`.
+
+### Optional
+
+```sh
+brew install make        # GNU Make 4.x; macOS ships 3.81, which also works
+brew install riscv-openocd   # only for on-chip debugging
+```
+
+### Berkeley TestFloat
+
+Not packaged in Homebrew. Build [SoftFloat-3e and
+TestFloat-3e](http://www.jhauser.us/arithmetic/TestFloat.html) from source with
+the system clang; this yields `testfloat_gen` and `testfloat_ver`. Put both on
+your `PATH`.
+
+### Caveat: rv32e multilib
+
+Stock toolchains ship no newlib or libgcc multilib for `rv32ec`/`ilp32e`;
+`-print-libgcc-file-name` silently resolves to the rv64 default. The test
+harness sidesteps this by linking neither, which is why it can run at the
+library's true target. Anything you link against this library in firmware
+should be checked the same way.
+
 ## Benchmarking & Demo
 
 A standalone benchmark suite is located in the `demo/` directory. It compares `librvflt32e` directly against standard libgcc soft-float routines on an RV32EC target, measuring both binary size footprint and execution cycle counts per operation.
@@ -217,70 +278,75 @@ Increase the randomised coverage for a longer soak:
 make test VEC_RANDOM=500000
 ```
 
+### Running Berkeley TestFloat
+
+`make test` is self-contained. For independent verification against
+[Berkeley TestFloat](http://www.jhauser.us/arithmetic/TestFloat.html), point the
+build at the directory holding `testfloat_gen` and `testfloat_ver`:
+
+```sh
+export TESTFLOAT_BIN=/path/to/TestFloat-3e/build/<platform>
+
+make testfloat OP=f32_mul     # one operation
+make testfloat-all            # all eleven
+```
+
+Covered: `f32_add`, `f32_sub`, `f32_mul`, `f32_div`, `f32_eq`, `f32_lt`,
+`f32_le`, `i32_to_f32`, `ui32_to_f32`, `f32_to_i32`, `f32_to_ui32`.
+The last two are driven with `-rminMag`, since the library truncates toward zero.
+
+Level 1 is the default. Level 2 is the exhaustive setting and is entirely
+practical here:
+
+```sh
+make testfloat-all TF_LEVEL=2
+```
+
+| | cases | wall time |
+| --- | ---: | ---: |
+| `TF_LEVEL=1`, all eleven operations | ~301,000 | 3 s |
+| `TF_LEVEL=2`, all eleven operations | ~46,394,000 | 3 m 11 s |
+
+A level-2 two-operand run is `2 * 1936^2` = 7,496,192 generated cases per
+operation. The intermediate files reach roughly 425 MB during such a run, but
+they are reused between operations rather than accumulated.
+
+The filter stage (`tests/tf_main.c`) runs under spike as the middle of the
+standard TestFloat pipeline, reaching the host through HTIF's syscall proxy so
+stdin and stdout are block buffered rather than one character at a time. The
+operation is taken from `testfloat_gen -prefix`, so no rebuild is needed to
+switch operations.
+
+Two limits are worth stating plainly:
+
+- **Exception flags are not tested.** The library implements no flag state, and
+  `testfloat_ver` has no option to ignore that column, so the filter echoes the
+  generated flags back. Only the numeric result is under test.
+- **Subnormal cases are skipped**, because the library flushes them to zero by
+  contract. The count skipped is reported on every run.
+
+### TestFloat strict modes
+
+`-checkNaNs` and `-checkInvInts` will both report errors, and in both cases this
+is a platform convention difference rather than a defect. The library follows
+RISC-V, while stock TestFloat builds use an 8086 or ARM specialization:
+
+| Case | rvflt32e (RISC-V) | SoftFloat ARM-VFPv2 |
+| --- | --- | --- |
+| NaN result | canonical `0x7FC00000` | input NaN quieted, payload preserved |
+| float→`int32` of NaN | `INT_MAX` | `0` |
+| float→`uint32` of NaN | `UINT_MAX` | `0` |
+| overflow, both directions | saturates | saturates (agrees) |
+
+RISC-V never propagates NaN payloads, and `fcvt.w.s` of a NaN yields `INT_MAX`,
+so the library is behaving correctly for its target. Building SoftFloat with
+`SPECIALIZE_TYPE=ARM-VFPv2-defaultNaN` makes `-checkNaNs` agree, since that
+specialization also uses a non-propagating `0x7FC00000`. The NaN to integer
+difference has no matching stock specialization.
+
 ## Attributions & Philosophy
 
 The core algorithms are built on the foundation of the excellent [RVfplib](https://github.com/pulp-platform/RVfplib). I originally planned to write every routine from scratch, but RVfplib was so well-crafted that forking it to keep it alive—since the original repository was archived—was the obvious choice. I also adapted several routines from my [rvint](https://github.com/benmesander/rvint) integer math library, optimizing them specifically for this target.
 
 `rvflt32e` reflects a personal philosophy of **strict technical reductionism**: stripping away stack frames, double-precision overhead, signaling NaNs, and library bloat until only the raw, essential assembly remains. The goal isn't just to make floating-point math fit onto a CH32V003—it's to do it with zero wasted cycles or bytes.
-
-## Building on macOS
-
-### Toolchain
-
-The library itself only needs an assembler, so either toolchain below works for
-`make all`. The `riscv-tools` tap additionally provides the simulator needed for
-`make test`.
-
-```sh
-brew tap riscv-software-src/riscv
-brew trust riscv-software-src/riscv      # required for third-party taps
-brew install riscv-tools                 # riscv-gnu-toolchain + spike + pk
-```
-
-`riscv-tools` is a meta-formula pulling in:
-
-| Formula | Provides |
-| --- | --- |
-| `riscv-gnu-toolchain` | `riscv64-unknown-elf-{gcc,as,ld,ar,objdump,size}` |
-| `riscv-isa-sim` | `spike`, the reference ISA simulator |
-| `riscv-pk` | `pk`, a proxy kernel (not used by this project) |
-
-Precompiled bottles exist only up to macOS Sequoia (15). On anything newer this
-builds from source and needs roughly 6.5 GB of scratch space.
-
-Only `riscv-gnu-toolchain` and `riscv-isa-sim` are actually required. The test
-harness is freestanding and drives spike over HTIF directly, so `riscv-pk` is
-not needed.
-
-If you only want to build the library and not run the tests, the smaller
-homebrew-core formulae are enough:
-
-```sh
-brew install riscv64-elf-gcc             # pulls in riscv64-elf-binutils
-```
-
-Note the different tool prefix — build with
-`make CROSS_COMPILE=riscv64-elf-`.
-
-### Optional
-
-```sh
-brew install make        # GNU Make 4.x; macOS ships 3.81, which also works
-brew install riscv-openocd   # only for on-chip debugging
-```
-
-### Berkeley TestFloat
-
-Not packaged in Homebrew. Build [SoftFloat-3e and
-TestFloat-3e](http://www.jhauser.us/arithmetic/TestFloat.html) from source with
-the system clang; this yields `testfloat_gen` and `testfloat_ver`. Put both on
-your `PATH`.
-
-### Caveat: rv32e multilib
-
-Stock toolchains ship no newlib or libgcc multilib for `rv32ec`/`ilp32e`;
-`-print-libgcc-file-name` silently resolves to the rv64 default. The test
-harness sidesteps this by linking neither, which is why it can run at the
-library's true target. Anything you link against this library in firmware
-should be checked the same way.
 

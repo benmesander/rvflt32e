@@ -22,6 +22,19 @@ CFLAGS        := $(ARCH_FLAGS) -Os -Wall -Wextra -ffunction-sections -fdata-sect
 # Number of randomised cases per operation in the generated reference vectors.
 VEC_RANDOM    ?= 20000
 
+# Berkeley TestFloat. Point TESTFLOAT_BIN at the directory holding
+# testfloat_gen and testfloat_ver, or put them on PATH.
+TESTFLOAT_BIN ?=
+TF_GEN        := $(if $(TESTFLOAT_BIN),$(TESTFLOAT_BIN)/,)testfloat_gen
+TF_VER        := $(if $(TESTFLOAT_BIN),$(TESTFLOAT_BIN)/,)testfloat_ver
+
+# Operation to exercise, and the rounding mode it needs. The library truncates
+# toward zero on float to integer conversion, which TestFloat calls minMag.
+OP            ?= f32_mul
+TF_ROUND      := $(if $(filter f32_to_i32 f32_to_ui32,$(OP)),-rminMag,)
+TF_LEVEL      ?= 1
+TF_VERFLAGS   ?=
+
 # Directories
 SRC_DIR       := src
 INC_DIR       := include
@@ -53,6 +66,10 @@ GEN           := $(TEST_BUILD)/gen
 VECTORS       := $(VEC_DIR)/vectors.h
 TEST_OBJS     := $(VEC_DIR)/start.o $(VEC_DIR)/spike_main.o
 TEST_ELF      := $(VEC_DIR)/spike_test.elf
+
+# The TestFloat filter stage embeds no vectors, so it is independent of
+# VEC_RANDOM and lives directly under the test build directory.
+TF_ELF        := $(TEST_BUILD)/tf_test.elf
 
 # Default Rule
 .PHONY: all
@@ -103,6 +120,40 @@ $(BUILD_DIR) $(TEST_BUILD) $(VEC_DIR) $(LIB_DIR):
 test: $(TEST_ELF)
 	@echo "=== Running conformance suite (spike, rv32ec) ==="
 	@$(SPIKE) --isa=rv32ec $(TEST_ELF)
+
+# Berkeley TestFloat pipeline. The filter stage runs under spike and talks to
+# the host through the HTIF syscall proxy, so stdin and stdout are buffered.
+$(TEST_BUILD)/tf_main.o: $(TEST_DIR)/tf_main.c | $(TEST_BUILD)
+	@echo "  CC      $<"
+	@$(CC) $(ARCH_FLAGS) -Os -Wall -Wextra -ffreestanding -I$(INC_DIR) -c $< -o $@
+
+$(TF_ELF): $(TEST_BUILD)/start.o $(TEST_BUILD)/tf_main.o $(TARGET_LIB)
+	@echo "  LINK    $@"
+	@$(CC) $(ARCH_FLAGS) $(TEST_LDFLAGS) $^ -o $@
+
+$(TEST_BUILD)/start.o: $(TEST_DIR)/start.S | $(TEST_BUILD)
+	@echo "  AS      $<"
+	@$(CC) $(ARCH_FLAGS) -c $< -o $@
+
+.PHONY: testfloat
+testfloat: $(TF_ELF)
+	@echo "=== TestFloat: $(OP) (level $(TF_LEVEL)) ==="
+	@$(TF_GEN) -level $(TF_LEVEL) $(TF_ROUND) -prefix $(OP) $(OP) > $(TEST_BUILD)/tf_in.txt
+	@$(SPIKE) --isa=rv32ec $(TF_ELF) < $(TEST_BUILD)/tf_in.txt > $(TEST_BUILD)/tf_out.txt \
+	  || { echo "$(OP): filter stage failed (unsupported operation?)"; exit 1; }
+	@gen=`wc -l < $(TEST_BUILD)/tf_in.txt`; out=`wc -l < $(TEST_BUILD)/tf_out.txt`; \
+	 echo "  $$out cases checked, `expr $$gen - 1 - $$out` skipped as subnormal (out of contract)"
+	@$(TF_VER) $(TF_ROUND) $(TF_VERFLAGS) $(OP) < $(TEST_BUILD)/tf_out.txt
+
+# Every operation the filter stage knows about.
+TF_OPS        := f32_add f32_sub f32_mul f32_div f32_eq f32_lt f32_le \
+                 i32_to_f32 ui32_to_f32 f32_to_i32 f32_to_ui32
+
+.PHONY: testfloat-all
+testfloat-all: $(TF_ELF)
+	@rc=0; for op in $(TF_OPS); do \
+	  $(MAKE) --no-print-directory testfloat OP=$$op TF_LEVEL=$(TF_LEVEL) || rc=1; \
+	 done; exit $$rc
 
 # Disassemble built library objects for inspection
 .PHONY: disasm

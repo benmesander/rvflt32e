@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/logo.jpg" alt="rvflt32e logo" width="300" />
+  <img src="assets/logo.jpeg" alt="rvflt32e logo" width="300" />
 </p>
 
 # rvflt32e

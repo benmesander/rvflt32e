@@ -218,7 +218,11 @@ make test VEC_RANDOM=500000
 ```
 ## Attributions
 
-The core algorithms are based upon the excellent [RVfplib](https://github.com/pulp-platform/RVfplib) . I was going to write my own, but this code was so good I decided to fork it and keep it alive as it has been archived. I also snagged some algorithms from my [rvint](https://github.com/benmesander/rvint) integer math library and modified them to be optimal for this application.
+## Attributions & Philosophy
+
+The core algorithms are built on the foundation of the excellent [RVfplib](https://github.com/pulp-platform/RVfplib). I originally planned to write every routine from scratch, but RVfplib was so well-crafted that forking it to keep it alive—since the original repository was archived—was the obvious choice. I also adapted several routines from my [rvint](https://github.com/benmesander/rvint) integer math library, optimizing them specifically for this target.
+
+`rvflt32e` reflects a personal philosophy of **strict technical reductionism**: stripping away stack frames, double-precision overhead, signaling NaNs, and library bloat until only the raw, essential assembly remains. The goal isn't just to make floating-point math fit onto a CH32V003—it's to do it with zero wasted cycles or bytes.
 
 ## Building on macOS
 

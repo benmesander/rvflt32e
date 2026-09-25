@@ -1,3 +1,4 @@
+################################################################################
 # Copyright ETH Zurich 2020
 # Copyright Benard Mesander 2026
 #
@@ -22,7 +23,8 @@
 # You should have received a copy of the GNU General Public License and
 # a copy of the GCC Runtime Library Exception along with this program;
 # see the files LICENSE.txt and LICENSE-EXCEPTION.txt respectively.  If not, see
-# <http://www.gnu.org/licenses/>.  */
+# <http://www.gnu.org/licenses/>.
+################################################################################
 
 .globl	__divsf3
 

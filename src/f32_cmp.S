@@ -1,3 +1,4 @@
+################################################################################
 # Copyright Benard Mesander 2026
 #
 # Author: Benard Mesander
@@ -22,6 +23,7 @@
 # a copy of the GCC Runtime Library Exception along with this program;
 # see the files LICENSE.txt and LICENSE-EXCEPTION.txt respectively.  If not, see
 # <http://www.gnu.org/licenses/>.
+################################################################################
 
 ################################################################################
 # src/f32_cmp.S - Relational comparisons for rvflt32e

@@ -81,6 +81,7 @@ int main(void) {
     (void)truncated;
     return 0;
 }
+```
 
 ### 4. Compiler and Linker Flags
 To integrate `librvflt32e.a` into your project build, configure your toolchain with the following flags:

@@ -1,14 +1,83 @@
 # rvflt32e
-Soft floating point single precision implementation for RV32E processors such as CH32V003
 
-This libary offers GCC and Clang-compatible single-precision IEEE754 floating point support for highly constrained RISC-V processors such as the ch32v003 (48Mhz, 2K RAM, 16K ROM, 16 registers, no multiplier, etc.). 
+A compact, high-performance soft floating-point single-precision library written in hand-optimized RISC-V assembly for RV32E targets (such as the WCH CH32V003).
 
-In order to make this code feasible, the implementation is minimal. In particular:
+This library offers GCC and Clang-compatible single-precision IEEE 754 floating-point support for highly constrained RISC-V processors (48 MHz, 2 KB RAM, 16 KB Flash, 16 registers `x0`–`x15`, no hardware multiplier or FPU).
+
+To keep the binary footprint minimal and execution fast:
 1. **Single precision only (`float`).**
 2. **Flush-to-zero (FTZ):** Subnormal inputs and results are flushed to zero.
 3. **No signaling NaN support:** Quiet NaNs are maintained.
 4. **Rounding Mode:** Round to Nearest, Ties to Even (RNE) is the only supported mode.
 5. **Zero Stack Allocation:** Operations execute strictly in registers without stack pushing or popping.
+
+---
+
+## Integration into Your C Program
+
+Because `rvflt32e` implements the standard RISC-V GCC soft-float ABI routines (`__addsf3`, `__mulsf3`, `__divsf3`, etc.), **no special header files or custom API function calls are required**. 
+
+When compiling C code without hardware floating-point support (`-march=rv32e_c`), GCC and Clang automatically emit calls to these routines whenever you perform standard C `float` arithmetic or type conversions.
+
+### 1. Avoiding Implicit `double` Promotion
+
+In standard C, floating-point literals without an `f` suffix (e.g., `3.14`) are treated as 64-bit `double`. Additionally, standard C promotes `float` arguments passed to variadic functions (`printf`) up to `double`.
+
+Because `rvflt32e` only provides 32-bit single-precision routines, accidentally triggering `double` operations will cause linker errors for missing `double` symbols (e.g., `__adddf3`, `__extendsfdf2`) or pull in massive soft-double library code.
+
+To prevent this, **always compile with these flags**:
+* `-fsingle-precision-constant`: Treats floating-point constants like `3.14` as `float` rather than `double`.
+* `-Wdouble-promotion`: Emits a compiler warning whenever a `float` is implicitly promoted to a `double`.
+
+### 2. Warning Regarding `printf` and `%f`
+
+Standard C library `printf("%f", val)` implementation should **never** be used on ultra-constrained targets like the CH32V003:
+1. `printf` variadic argument rules automatically convert `float` arguments to `double`.
+2. Standard `newlib` or `stdio` formatting routines for floating-point values require 5 KB to 12 KB of Flash, quickly exceeding small MCU memory limits.
+
+**Recommended Alternatives:**
+* Print floating-point values by splitting them into integer and fractional parts using integer division/modulo.
+* Always append `f` to floating-point constants in C (e.g., `12.34f`).
+
+### 3. C Code Example
+
+```c
+// main.c
+volatile float a = 12.34f;
+volatile float b = 56.78f;
+
+int main(void) {
+    // GCC automatically calls __addsf3 and __mulsf3 under the hood
+    volatile float sum = a + b;
+    volatile float prod = a * b;
+    volatile int   truncated = (int)sum; // Calls __fixsfsi
+
+    (void)prod;
+    (void)truncated;
+    return 0;
+}
+
+### 4. Compiler and Linker Flags
+To integrate `librvflt32e.a` into your project build, configure your toolchain with the following flags:
+1. Compilation Flags: Enforce single precision and enable section-level garbage collection:
+```sh
+-ffunction-sections -fdata-sections -fsingle-precision-constant -Wdouble-promotion
+```
+2. Linker Flags: Link `librvflt32e.a` and enable linker garbage collection (`--gc-sections`):
+```sh
+-L/path/to/librvflt32e/lib -lrvflt32e -Wl,--gc-sections
+```
+#### Complete Command Line Example:
+```sh
+riscv64-unknown-elf-gcc -march=rv32e_c -mabi=ilp32e -Os \
+    -ffunction-sections -fdata-sections \
+    -fsingle-precision-constant -Wdouble-promotion \
+    -T link.ld -nostdlib \
+    main.c crt0.S \
+    -L../lib -lrvflt32e \
+    -Wl,--gc-sections \
+    -o firmware.elf
+```
 
 ## Linking only what you use
 
@@ -47,8 +116,8 @@ Some routines unavoidably pull in a neighbour because they share code:
 A standalone benchmark suite is located in the `demo/` directory. It compares `librvflt32e` directly against standard libgcc soft-float routines on an RV32EC target, measuring both binary size footprint and execution cycle counts per operation.
 
 ### Prerequisites
-1. **RISC-V Toolchain with `ilp32e` Multilib Support:**
-A toolchain supporting rv32e/ilp32e (such as riscv-none-elf-gcc from xPack) is required to build against standard libgcc.
+1. **RISC-V Toolchain with** `ilp32e` **Multilib Support:**
+A toolchain supporting `rv32e/ilp32e` (such as `riscv-none-elf-gcc` from xPack) is required to build against standard libgcc.
 1. **Spike Simulator:**
 Install the RISC-V ISA simulator (`spike`) to execute cycle count benchmarks over HTIF.
 
